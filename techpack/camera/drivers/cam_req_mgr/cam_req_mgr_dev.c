@@ -25,8 +25,11 @@
 #include "cam_debug_util.h"
 #include "cam_common_util.h"
 
-// sunhaiyuan_hq@camera_bsp moddity V4L2 queue evt failed CRASH 20200822
-#define CAM_REQ_MGR_EVENT_MAX 150    //30
+#ifdef VENDOR_EDIT
+#define CAM_REQ_MGR_EVENT_MAX 100
+#else
+#define CAM_REQ_MGR_EVENT_MAX 30
+#endif
 
 static struct cam_req_mgr_device g_dev;
 struct kmem_cache *g_cam_req_mgr_timer_cachep;
@@ -157,7 +160,8 @@ static int cam_req_mgr_close(struct file *filep)
 	struct v4l2_subdev_fh *subdev_fh = to_v4l2_subdev_fh(vfh);
 
 	CAM_WARN(CAM_CRM,
-		"release invoked associated userspace process has died");
+		"release invoked associated userspace process has died, open_cnt: %d",
+		g_dev.open_cnt);
 	mutex_lock(&g_dev.cam_lock);
 
 	if (g_dev.open_cnt <= 0) {
@@ -644,7 +648,6 @@ void cam_subdev_notify_message(u32 subdev_type,
 	struct cam_subdev *csd = NULL;
 
 	list_for_each_entry(sd, &g_dev.v4l2_dev->subdevs, list) {
-		sd->entity.name = video_device_node_name(sd->devnode);
 		if (sd->entity.function == subdev_type) {
 			csd = container_of(sd, struct cam_subdev, sd);
 			if (csd->msg_cb != NULL)

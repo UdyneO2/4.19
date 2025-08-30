@@ -1,4 +1,4 @@
-.ov02b1b_setting =
+.ov02b10_setting =
 {
 	.reg_setting =
 	{

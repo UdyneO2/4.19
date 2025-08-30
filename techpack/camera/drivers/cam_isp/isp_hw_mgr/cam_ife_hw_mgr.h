@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_IFE_HW_MGR_H_
@@ -24,6 +24,7 @@
  * @dentry:                    Debugfs entry
  * @csid_debug:                csid debug information
  * @enable_recovery:           enable recovery
+ * @enable_csid_recovery:      enable csid recovery
  * @enable_diag_sensor_status: enable sensor diagnosis status
  * @enable_req_dump:           Enable request dump on HW errors
  * @per_req_reg_dump:          Enable per request reg dump
@@ -33,6 +34,7 @@ struct cam_ife_hw_mgr_debug {
 	struct dentry  *dentry;
 	uint64_t       csid_debug;
 	uint32_t       enable_recovery;
+	uint32_t       enable_csid_recovery;
 	uint32_t       camif_debug;
 	bool           enable_req_dump;
 	bool           per_req_reg_dump;
@@ -148,6 +150,7 @@ struct cam_ife_hw_mgr_ctx {
  * @ife_dev_caps           ife device capability per core
  * @work q                 work queue for IFE hw manager
  * @debug_cfg              debug configuration
+ * @ctx_lock               Spinlock for HW manager
  */
 struct cam_ife_hw_mgr {
 	struct cam_isp_hw_mgr          mgr_common;
@@ -159,13 +162,14 @@ struct cam_ife_hw_mgr {
 	atomic_t                       active_ctx_cnt;
 	struct list_head               free_ctx_list;
 	struct list_head               used_ctx_list;
-	struct cam_ife_hw_mgr_ctx      ctx_pool[CAM_CTX_MAX];
+	struct cam_ife_hw_mgr_ctx      ctx_pool[CAM_IFE_CTX_MAX];
 
 	struct cam_ife_csid_hw_caps    ife_csid_dev_caps[
 						CAM_IFE_CSID_HW_NUM_MAX];
 	struct cam_vfe_hw_get_hw_cap   ife_dev_caps[CAM_IFE_HW_NUM_MAX];
 	struct cam_req_mgr_core_workq *workq;
 	struct cam_ife_hw_mgr_debug    debug_cfg;
+	spinlock_t                     ctx_lock;
 };
 
 /**
@@ -180,7 +184,7 @@ struct cam_ife_hw_mgr {
 struct cam_ife_hw_event_recovery_data {
 	uint32_t                   error_type;
 	uint32_t                   affected_core[CAM_ISP_HW_NUM_MAX];
-	struct cam_ife_hw_mgr_ctx *affected_ctx[CAM_CTX_MAX];
+	struct cam_ife_hw_mgr_ctx *affected_ctx[CAM_IFE_CTX_MAX];
 	uint32_t                   no_of_context;
 };
 
@@ -196,4 +200,10 @@ struct cam_ife_hw_event_recovery_data {
  */
 int cam_ife_hw_mgr_init(struct cam_hw_mgr_intf *hw_mgr_intf, int *iommu_hdl);
 
+#ifndef CONFIG_SPECTRA_CAMERA_IFE
+int cam_ife_hw_mgr_init(struct cam_hw_mgr_intf *hw_mgr_intf, int *iommu_hdl)
+{
+	return 0;
+}
+#endif
 #endif /* _CAM_IFE_HW_MGR_H_ */

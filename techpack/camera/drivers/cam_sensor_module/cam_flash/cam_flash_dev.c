@@ -1,19 +1,27 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ */
+
 #include <linux/module.h>
+#ifdef VENDOR_EDIT
 #include <linux/proc_fs.h>
 #include <linux/time.h>
 #include <linux/rtc.h>
-#include <linux/delay.h>
-
+struct cam_flash_ctrl *vendor_flash_ctrl = NULL;
+struct cam_flash_ctrl *front_flash_ctrl = NULL;
+#endif
 #include "cam_flash_dev.h"
 #include "cam_flash_soc.h"
 #include "cam_flash_core.h"
 #include "cam_common_util.h"
+#ifdef VENDOR_EDIT
 #include "cam_res_mgr_api.h"
-
-extern int set_volt(bool isTorchOn);
-
-struct cam_flash_ctrl *vendor_flash_ctrl = NULL;
-struct cam_flash_ctrl *front_flash_ctrl = NULL;
+#endif
+//#ifdef ODM_HQ_EDIT
+/*zoutao@ODM_HQ.Charge add flash led status 2020/07/23*/
+extern void oplus_chg_set_flash_led_status(bool val);
+//#endif
 
 static int32_t cam_flash_driver_cmd(struct cam_flash_ctrl *fctrl,
 		void *arg, struct cam_flash_private_soc *soc_private)
@@ -69,7 +77,9 @@ static int32_t cam_flash_driver_cmd(struct cam_flash_ctrl *fctrl,
 		bridge_params.v4l2_sub_dev_flag = 0;
 		bridge_params.media_entity_flag = 0;
 		bridge_params.priv = fctrl;
-
+#ifndef VENDOR_EDIT
+		bridge_params.dev_id = CAM_FLASH;
+#endif
 		flash_acq_dev.device_handle =
 			cam_create_device_hdl(&bridge_params);
 		fctrl->bridge_intf.device_hdl =
@@ -204,6 +214,7 @@ release_mutex:
 	return rc;
 }
 
+#ifdef VENDOR_EDIT
 volatile static int flash_mode;
 volatile static int pre_flash_mode;
 static ssize_t flash_on_off(struct cam_flash_ctrl *flash_ctrl)
@@ -223,6 +234,7 @@ static ssize_t flash_on_off(struct cam_flash_ctrl *flash_ctrl)
 	if(pre_flash_mode == flash_mode)
 		return rc;
 
+
 	if(pre_flash_mode == 5 && flash_mode == 0){
 		CAM_ERR(CAM_FLASH, "camera is opened,not to set flashlight off");
 		return rc;
@@ -232,20 +244,23 @@ static ssize_t flash_on_off(struct cam_flash_ctrl *flash_ctrl)
 	switch (flash_mode)
 	{
 		case 0:
+			//#ifdef ODM_HQ_EDIT
+			/*zoutao@ODM_HQ.Charge add flash led status 2020/07/23*/
+			oplus_chg_set_flash_led_status(0);
+			//#endif
 			flash_data.led_current_ma[0] = 0;
 			flash_data.led_current_ma[1] = 0;
-			set_volt(false);
 			cam_flash_off(flash_ctrl);
 			flash_ctrl->flash_state = CAM_FLASH_STATE_INIT;
-			pr_info("Torch turn off \n");
 			break;
 		case 1:
-			flash_data.led_current_ma[0] = 80;
-			flash_data.led_current_ma[1] = 80;
-			set_volt(true);
-			mdelay(10);
+			//#ifdef ODM_HQ_EDIT
+			/*zoutao@ODM_HQ.Charge add flash led status 2020/07/23*/
+			oplus_chg_set_flash_led_status(1);
+			//#endif
+			flash_data.led_current_ma[0] = 100;
+			flash_data.led_current_ma[1] = 100;
 			cam_flash_on(flash_ctrl, &flash_data, 0);
-			pr_info("Torch  turn on \n");
 			break;
 		case 2:
 			flash_data.led_current_ma[0] = 1000;
@@ -299,7 +314,20 @@ static int flash_proc_init(struct cam_flash_ctrl *flash_ctl)
 	char proc_flash[16] = "qcom_flash";
 	char strtmp[] = "0";
 	struct proc_dir_entry *proc_entry;
-
+	CAM_ERR(CAM_FLASH, "wayoung flash_name", flash_ctl->flash_name);
+	// @Todo [CAM] adjust for pmic and current_ma
+	// if (flash_ctl->flash_name == NULL) {
+	// 	CAM_ERR(CAM_FLASH, "%s get flash name is NULL %d\n", __func__, __LINE__);
+	// 	return -1;
+	// } else {
+	// 	if ((strcmp(flash_ctl->flash_name, "pmic_19125") != 0)
+	// 			&&(strcmp(flash_ctl->flash_name, "pmic_19015") != 0)
+	// 			&&(strcmp(flash_ctl->flash_name, "pmic_19191") != 0)
+	// 			&&(strcmp(flash_ctl->flash_name, "pmic") != 0)) {
+	// 		CAM_ERR(CAM_FLASH, "%s get flash name is PMIC ,so return\n", __func__);
+	// 		return -1;
+	// 	}
+	// }
 	if (flash_ctl->soc_info.index > 0) {
 		sprintf(strtmp, "%d", flash_ctl->soc_info.index);
 		strcat(proc_flash, strtmp);
@@ -338,9 +366,11 @@ static ssize_t cam_flash_switch_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	return snprintf(buf, 5, "%d\n", flash_mode);
+	//return simple_read_from_buffer(buff, 10, buf, value,1);
 }
 
 static DEVICE_ATTR(fswitch, 0660, cam_flash_switch_show,cam_flash_switch_store);
+#endif
 
 static int32_t cam_flash_init_default_params(struct cam_flash_ctrl *fctrl)
 {
@@ -647,11 +677,11 @@ static int32_t cam_flash_platform_probe(struct platform_device *pdev)
 	mutex_init(&(fctrl->flash_mutex));
 
 	fctrl->flash_state = CAM_FLASH_STATE_INIT;
-
+	#ifdef VENDOR_EDIT
 	if (flash_proc_init(fctrl) < 0) {
 		device_create_file(&pdev->dev, &dev_attr_fswitch);
 	}
-
+	#endif
 	CAM_DBG(CAM_FLASH, "Probe success");
 	return rc;
 

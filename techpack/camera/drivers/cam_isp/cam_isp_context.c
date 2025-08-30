@@ -1818,8 +1818,14 @@ end:
 		if (notify.error == CRM_KMD_ERR_FATAL) {
 			req_msg.session_hdl = ctx_isp->base->session_hdl;
 			req_msg.u.err_msg.device_hdl = ctx_isp->base->dev_hdl;
-			req_msg.u.err_msg.error_type =
-				CAM_REQ_MGR_ERROR_TYPE_RECOVERY;
+
+			if (error_type == CAM_ISP_HW_ERROR_CSID_FATAL)
+				req_msg.u.err_msg.error_type =
+					CAM_REQ_MGR_ERROR_TYPE_FULL_RECOVERY;
+			else
+				req_msg.u.err_msg.error_type =
+					CAM_REQ_MGR_ERROR_TYPE_RECOVERY;
+
 			req_msg.u.err_msg.link_hdl = ctx_isp->base->link_hdl;
 			req_msg.u.err_msg.request_id = error_request_id;
 			req_msg.u.err_msg.resource_size = 0x0;
@@ -3630,6 +3636,7 @@ static int __cam_isp_ctx_config_dev_in_top_state(
 	req_isp->num_fence_map_in = cfg.num_in_map_entries;
 	req_isp->num_acked = 0;
 	req_isp->bubble_detected = false;
+	req_isp->hw_update_data.packet = packet;
 
 	for (i = 0; i < req_isp->num_fence_map_out; i++) {
 		rc = cam_sync_get_obj_ref(req_isp->fence_map_out[i].sync_id);
@@ -3839,7 +3846,7 @@ get_dev_handle:
 	req_hdl_param.media_entity_flag = 0;
 	req_hdl_param.ops = ctx->crm_ctx_intf;
 	req_hdl_param.priv = ctx;
-
+	req_hdl_param.dev_id = CAM_ISP;
 	CAM_DBG(CAM_ISP, "get device handle form bridge");
 	ctx->dev_hdl = cam_create_device_hdl(&req_hdl_param);
 	if (ctx->dev_hdl <= 0) {
@@ -4985,14 +4992,14 @@ int cam_isp_context_init(struct cam_isp_context *ctx,
 	ctx->init_timestamp = jiffies_to_msecs(jiffies);
 	ctx->isp_device_type = isp_device_type;
 
-	for (i = 0; i < CAM_CTX_REQ_MAX; i++) {
+	for (i = 0; i < CAM_ISP_CTX_REQ_MAX; i++) {
 		ctx->req_base[i].req_priv = &ctx->req_isp[i];
 		ctx->req_isp[i].base = &ctx->req_base[i];
 	}
 
 	/* camera context setup */
 	rc = cam_context_init(ctx_base, isp_dev_name, CAM_ISP, ctx_id,
-		crm_node_intf, hw_intf, ctx->req_base, CAM_CTX_REQ_MAX);
+		crm_node_intf, hw_intf, ctx->req_base, CAM_ISP_CTX_REQ_MAX);
 	if (rc) {
 		CAM_ERR(CAM_ISP, "Camera Context Base init failed");
 		goto err;

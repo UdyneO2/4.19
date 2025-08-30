@@ -2930,7 +2930,7 @@ static int cam_req_mgr_cb_notify_trigger(
 
 	task = cam_req_mgr_workq_get_task(link->workq);
 	if (!task) {
-		CAM_ERR(CAM_CRM, "no empty task frame %lld",
+		CAM_ERR_RATE_LIMIT(CAM_CRM, "no empty task frame %lld",
 			trigger_data->frame_id);
 		rc = -EBUSY;
 		goto end;
@@ -3168,7 +3168,8 @@ int cam_req_mgr_create_session(
 	ses_info->session_hdl = session_hdl;
 
 	mutex_init(&cam_session->lock);
-	CAM_DBG(CAM_CRM, "LOCK_DBG session lock %pK", &cam_session->lock);
+	CAM_DBG(CAM_CRM, "LOCK_DBG session lock %pK hdl 0x%x",
+		&cam_session->lock, session_hdl);
 
 	mutex_lock(&cam_session->lock);
 	cam_session->session_hdl = session_hdl;
@@ -3328,7 +3329,7 @@ int cam_req_mgr_link(struct cam_req_mgr_ver_info *link_info)
 	memset(&root_dev, 0, sizeof(struct cam_create_dev_hdl));
 	root_dev.session_hdl = link_info->u.link_info_v1.session_hdl;
 	root_dev.priv = (void *)link;
-
+	root_dev.dev_id = CAM_CRM;
 	mutex_lock(&link->lock);
 	/* Create unique dev handle for link */
 	link->link_hdl = cam_create_device_hdl(&root_dev);
@@ -3437,6 +3438,7 @@ int cam_req_mgr_link_v2(struct cam_req_mgr_ver_info *link_info)
 	memset(&root_dev, 0, sizeof(struct cam_create_dev_hdl));
 	root_dev.session_hdl = link_info->u.link_info_v2.session_hdl;
 	root_dev.priv = (void *)link;
+	root_dev.dev_id = CAM_CRM;
 
 	mutex_lock(&link->lock);
 	/* Create unique dev handle for link */

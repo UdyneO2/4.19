@@ -201,8 +201,19 @@ int cam_flash_pmic_power_ops(struct cam_flash_ctrl *fctrl,
 	}
 
 	if (!regulator_enable) {
+#ifndef VENDOR_EDIT
+		if (((fctrl->flash_state == CAM_FLASH_STATE_START) ||
+			(fctrl->flash_state == CAM_FLASH_STATE_ACQUIRE)) &&
+			(fctrl->is_regulator_enabled == true))
+#else
 		if ((fctrl->flash_state == CAM_FLASH_STATE_START) &&
-			(fctrl->is_regulator_enabled == true)) {
+			(fctrl->is_regulator_enabled == true))
+#endif
+		{
+			/*
+			 * Release dev is called after stop dev and in
+			 * stop dev flash state is set to acquire dev.
+			 */
 			rc = cam_flash_prepare(fctrl, false);
 			if (rc)
 				CAM_ERR(CAM_FLASH,
@@ -563,6 +574,7 @@ static int cam_flash_high(
 	return rc;
 }
 
+#ifdef VENDOR_EDIT
 int cam_flash_on(struct cam_flash_ctrl *flash_ctrl,
 	struct cam_flash_frame_setting *flash_data,
 	int mode) {
@@ -574,7 +586,7 @@ int cam_flash_on(struct cam_flash_ctrl *flash_ctrl,
 	}
 	return rc;
 }
-
+#endif
 static int cam_flash_i2c_delete_req(struct cam_flash_ctrl *fctrl,
 	uint64_t req_id)
 {

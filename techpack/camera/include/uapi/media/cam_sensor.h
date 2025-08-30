@@ -14,7 +14,6 @@
 #define CAM_FLASH_MAX_LED_TRIGGERS 3
 #define MAX_OIS_NAME_SIZE 32
 #define CAM_CSIPHY_SECURE_MODE_ENABLED 1
-
 /**
  * struct cam_sensor_query_cap - capabilities info for sensor
  *
@@ -483,7 +482,7 @@ struct cam_flash_query_cap_info {
 	uint32_t    max_duration_flash[CAM_FLASH_MAX_LED_TRIGGERS];
 	uint32_t    max_current_torch[CAM_FLASH_MAX_LED_TRIGGERS];
 } __attribute__ ((packed));
-
+#ifdef VENDOR_EDIT
 #define FD_DFCT_MAX_NUM 5
 #define SG_DFCT_MAX_NUM 299
 #define FD_DFCT_NUM_ADDR 0x7678
@@ -502,4 +501,6 @@ struct sony_dfct_tbl_t {
 	int fd_dfct_num;                         // the number of FD static defect
 	int fd_dfct_addr[FD_DFCT_MAX_NUM];       // [ u25 ( upper-u13 = x-addr, lower-u12 = y-addr ) ]
 } __attribute__ ((packed));
+#endif
+
 #endif

@@ -11,10 +11,18 @@
 #include "cam_trace.h"
 #include "cam_common_util.h"
 #include "cam_packet_util.h"
-#include <linux/oem/project_info.h>
 
-extern int set_volt(bool isTorchOn);
+#ifndef VENDOR_EDIT
+#define VENDOR_EDIT
+#endif
 
+#ifdef VENDOR_EDIT
+/*fujiahao@camera add for open flash when charge*/
+extern void oplus_chg_set_flash_led_status(bool val);
+extern bool oplus_chg_get_voocphy_support(void);
+#endif
+
+#ifdef VENDOR_EDIT
 #define FD_DFCT_NUM_ADDR 0x7678
 #define SG_DFCT_NUM_ADDR 0x767A
 #define FD_DFCT_ADDR 0x8B00
@@ -154,6 +162,9 @@ static int sensor_imx471_get_dpc_data(struct cam_sensor_ctrl_t *s_ctrl)
     CAM_INFO(CAM_SENSOR, "exit");
     return rc;
 }
+#endif
+
+
 
 static void cam_sensor_update_req_mgr(
 	struct cam_sensor_ctrl_t *s_ctrl,
@@ -781,20 +792,11 @@ int cam_sensor_match_id(struct cam_sensor_ctrl_t *s_ctrl)
 				chipid, slave_info->sensor_id);
 		return -ENODEV;
 	}
-
-    if (slave_info->sensor_id == 0x0d42) {
-        push_component_info(R_CAMERA,"OV13B10","QTECH");
-    } else if(slave_info->sensor_id == 0x885A) {
-        push_component_info(F_CAMERA,"OV8856","SHINETECH");
-    } else if(slave_info->sensor_id == 0x02e0) {
-        push_component_info(SECOND_R_CAMERA,"GC02M1B","CXT");
-    } else if(slave_info->sensor_id == 0x2385) {
-        push_component_info(THIRD_R_CAMERA,"GC02K0","CXT");
-    }
-
+#ifdef VENDOR_EDIT
 	if (slave_info->sensor_id == 0x0471) {
 		sensor_imx471_get_dpc_data(s_ctrl);
 	}
+#endif
 
 	return rc;
 }
@@ -931,6 +933,7 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 		bridge_params.v4l2_sub_dev_flag = 0;
 		bridge_params.media_entity_flag = 0;
 		bridge_params.priv = s_ctrl;
+		bridge_params.dev_id = CAM_SENSOR;
 
 		sensor_acq_dev.device_handle =
 			cam_create_device_hdl(&bridge_params);
@@ -981,9 +984,6 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 		}
 
 		rc = cam_sensor_power_down(s_ctrl);
-
-        set_volt(false);
-
 		if (rc < 0) {
 			CAM_ERR(CAM_SENSOR, "Sensor Power Down failed");
 			goto release_mutex;
@@ -1054,9 +1054,17 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 			"CAM_START_DEV Success, sensor_id:0x%x,sensor_slave_addr:0x%x",
 			s_ctrl->sensordata->slave_info.sensor_id,
 			s_ctrl->sensordata->slave_info.sensor_slave_addr);
+        #ifdef VENDOR_EDIT
+        /*fujiahao@camera add for open flash when charge*/
+        if(0x0471 != s_ctrl->sensordata->slave_info.sensor_id)
+        {
+    	    if (oplus_chg_get_voocphy_support()) {
+    	    	CAM_ERR(CAM_SENSOR, "open flash led status for voocphy: %d", rc);
+    	    	oplus_chg_set_flash_led_status(1);
+    	    }
+        }
+        #endif
 	}
-
-        set_volt(true);
 		break;
 	case CAM_STOP_DEV: {
 		if (s_ctrl->sensor_state != CAM_SENSOR_START) {
@@ -1084,8 +1092,17 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 			"CAM_STOP_DEV Success, sensor_id:0x%x,sensor_slave_addr:0x%x",
 			s_ctrl->sensordata->slave_info.sensor_id,
 			s_ctrl->sensordata->slave_info.sensor_slave_addr);
+        #ifdef VENDOR_EDIT
+        /*fujiahao@camera add for open flash when charge*/
+        if(0x0471 != s_ctrl->sensordata->slave_info.sensor_id)
+        {
+            if (oplus_chg_get_voocphy_support()) {
+                CAM_ERR(CAM_SENSOR, "close flash led status  for voocphy:%d", rc);
+                oplus_chg_set_flash_led_status(0);
+            }
+        }
+        #endif
 	}
-
 		break;
 	case CAM_CONFIG_DEV: {
 		rc = cam_sensor_i2c_pkt_parse(s_ctrl, arg);
@@ -1171,7 +1188,7 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 		}
 	}
 		break;
-
+#ifdef VENDOR_EDIT
 	case CAM_GET_DPC_DATA: {
 		if (0x0471 != s_ctrl->sensordata->slave_info.sensor_id) {
 			rc = -EFAULT;
@@ -1187,7 +1204,7 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 		}
 	}
 		break;
-
+#endif
 	default:
 		CAM_ERR(CAM_SENSOR, "Invalid Opcode: %d", cmd->op_code);
 		rc = -EINVAL;

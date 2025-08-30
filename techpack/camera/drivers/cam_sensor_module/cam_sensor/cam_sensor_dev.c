@@ -8,10 +8,12 @@
 #include "cam_sensor_soc.h"
 #include "cam_sensor_core.h"
 
+#ifdef VENDOR_EDIT
+
 #define OV13B10_SENSOR_ID		0x0d42
 #define OV16A10_SENSOR_ID		0x1641
 #define OV8856_SENSOR_ID		0x885A
-#define OV02B1B_SENSOR_ID		0x002B
+#define OV02B10_SENSOR_ID		0x002B
 #define HI846_SENSOR_ID			0x4608
 #define GC02M1B_SENSOR_ID		0x02e0
 #define S5K4H7_SENSOR_ID		0x487B
@@ -19,6 +21,7 @@
 #define GC02K0_SENSOR_ID		0x2395
 #define GC02K0_SENSOR_ID_2		0x2385
 #define S5K3L6_SENSOR_ID		0x30c6
+#define OV48B_SENSOR_ID         0x5648
 
 struct cam_sensor_i2c_reg_setting_array {
 	struct cam_sensor_i2c_reg_array reg_setting[4600];
@@ -32,20 +35,21 @@ struct cam_sensor_settings {
 	struct cam_sensor_i2c_reg_setting_array ov13b10_setting;
 	struct cam_sensor_i2c_reg_setting_array ov16a10_setting;
 	struct cam_sensor_i2c_reg_setting_array ov8856_setting;
-	struct cam_sensor_i2c_reg_setting_array ov02b1b_setting;
+	struct cam_sensor_i2c_reg_setting_array ov02b10_setting;
 	struct cam_sensor_i2c_reg_setting_array hi846_setting;
 	struct cam_sensor_i2c_reg_setting_array gc02m1b_setting;
 	struct cam_sensor_i2c_reg_setting_array s5k4h7_setting;
 	struct cam_sensor_i2c_reg_setting_array imx471_setting;
 	struct cam_sensor_i2c_reg_setting_array gc02k0_setting;
 	struct cam_sensor_i2c_reg_setting_array s5k3l6_setting;
+	struct cam_sensor_i2c_reg_setting_array ov48b_setting;
 };
 
 struct cam_sensor_settings sensor_settings = {
 #include "CAM_SENSOR_SETTINGS.h"
 };
-
 static bool is_ftm_current_test = false;
+#endif
 
 static long cam_sensor_subdev_ioctl(struct v4l2_subdev *sd,
 	unsigned int cmd, void *arg)
@@ -53,13 +57,16 @@ static long cam_sensor_subdev_ioctl(struct v4l2_subdev *sd,
 	int rc = 0;
 	struct cam_sensor_ctrl_t *s_ctrl =
 		v4l2_get_subdevdata(sd);
+#ifdef VENDOR_EDIT
 	struct cam_sensor_i2c_reg_setting sensor_setting;
 	struct cam_sensor_i2c_reg_setting_array *ptr = NULL;
+#endif
 
 	switch (cmd) {
-		case VIDIOC_CAM_CONTROL:
-			rc = cam_sensor_driver_cmd(s_ctrl, arg);
-			break;
+	case VIDIOC_CAM_CONTROL:
+		rc = cam_sensor_driver_cmd(s_ctrl, arg);
+		break;
+#ifdef VENDOR_EDIT
 		case VIDIOC_CAM_FTM_POWNER_DOWN:
 			CAM_ERR(CAM_SENSOR, "FTM power down");
 			return cam_sensor_power_down(s_ctrl);
@@ -79,14 +86,14 @@ static long cam_sensor_subdev_ioctl(struct v4l2_subdev *sd,
 				case OV13B10_SENSOR_ID:
 					ptr = &sensor_settings.ov13b10_setting;
 					break;
-				case OV16A10_SENSOR_ID:
-					ptr = &sensor_settings.ov16a10_setting;
+				case OV48B_SENSOR_ID:
+					ptr = &sensor_settings.ov48b_setting;
 					break;
 				case OV8856_SENSOR_ID:
 					ptr = &sensor_settings.ov8856_setting;
 					break;
-				case OV02B1B_SENSOR_ID:
-					ptr = &sensor_settings.ov02b1b_setting;
+				case OV02B10_SENSOR_ID:
+					ptr = &sensor_settings.ov02b10_setting;
 					break;
 				case HI846_SENSOR_ID:
 					ptr = &sensor_settings.hi846_setting;
@@ -125,10 +132,11 @@ static long cam_sensor_subdev_ioctl(struct v4l2_subdev *sd,
 				CAM_ERR(CAM_SENSOR, "FTM successfully to write sensor setting");
 			}
 			break;
-		default:
-			CAM_ERR(CAM_SENSOR, "Invalid ioctl cmd: %d", cmd);
-			rc = -EINVAL;
-			break;
+#endif
+	default:
+		CAM_ERR(CAM_SENSOR, "Invalid ioctl cmd: %d", cmd);
+		rc = -EINVAL;
+		break;
 	}
 	return rc;
 }
@@ -145,8 +153,10 @@ static int cam_sensor_subdev_close(struct v4l2_subdev *sd,
 	}
 
 	mutex_lock(&(s_ctrl->cam_sensor_mutex));
+	#ifdef VENDOR_EDIT
 	if(!is_ftm_current_test)
-		cam_sensor_shutdown(s_ctrl);
+	#endif
+	cam_sensor_shutdown(s_ctrl);
 	mutex_unlock(&(s_ctrl->cam_sensor_mutex));
 
 	return 0;

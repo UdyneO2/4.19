@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
 #include "cam_cci_dev.h"
@@ -11,6 +11,7 @@
 #define CCI_MAX_DELAY 1000000
 
 static struct v4l2_subdev *g_cci_subdev[MAX_CCI];
+static struct dentry *debugfs_root;
 
 struct v4l2_subdev *cam_cci_get_subdev(int cci_dev_index)
 {
@@ -68,11 +69,16 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 	void __iomem *base = soc_info->reg_map[0].mem_base;
 	unsigned long flags;
 	bool rd_done_th_assert = false;
+	uint32_t readreg_val = 0;
+	uint32_t reg_offset = 0;
+	uint32_t readreg_val1 = 0;
+	uint32_t reg_offset1 = 0;
+
 
 	irq_status0 = cam_io_r_mb(base + CCI_IRQ_STATUS_0_ADDR);
 	irq_status1 = cam_io_r_mb(base + CCI_IRQ_STATUS_1_ADDR);
-	CAM_DBG(CAM_CCI, "BASE: %pK", base);
-	CAM_DBG(CAM_CCI, "irq0:%x irq1:%x", irq_status0, irq_status1);
+	CAM_DBG(CAM_CCI, "BASE: %pK irq0:%x irq1:%x",
+		base, irq_status0, irq_status1, cci_dev->soc_info.index);
 
 	if (irq_status0 & CCI_IRQ_STATUS_0_RST_DONE_ACK_BMSK) {
 		struct cam_cci_master_info *cci_master_info;
@@ -82,7 +88,9 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 				false;
 			if (!cci_master_info->status)
 				complete(&cci_master_info->reset_complete);
-			cci_master_info->status = 0;
+
+			complete_all(&cci_master_info->rd_done);
+			complete_all(&cci_master_info->th_complete);
 		}
 		if (cci_dev->cci_master_info[MASTER_1].reset_pending == true) {
 			cci_master_info = &cci_dev->cci_master_info[MASTER_1];
@@ -90,7 +98,9 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 				false;
 			if (!cci_master_info->status)
 				complete(&cci_master_info->reset_complete);
-			cci_master_info->status = 0;
+
+			complete_all(&cci_master_info->rd_done);
+			complete_all(&cci_master_info->th_complete);
 		}
 	}
 
@@ -125,9 +135,19 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 		atomic_set(&cci_master_info->q_free[QUEUE_0], 0);
 		cci_master_info->status = 0;
 		if (atomic_read(&cci_master_info->done_pending[QUEUE_0]) == 1) {
+			CAM_DBG(CAM_CCI, "reportq reset M0Q0 CCI%d", cci_dev->soc_info.index);
 			complete(&cci_master_info->report_q[QUEUE_0]);
 			atomic_set(&cci_master_info->done_pending[QUEUE_0], 0);
 		}
+		reg_offset = DEBUG_MASTER_QUEUE_REG_START +  MASTER_0*0x200 +
+			QUEUE_0*0x100;
+		readreg_val = cam_io_r_mb(base + reg_offset);
+		reg_offset1 = DEBUG_MASTER_QUEUE_REG_START +  MASTER_0*0x200 +
+			QUEUE_0*0x100 + 3 * 4;
+		readreg_val1 = cam_io_r_mb(base + reg_offset1);
+		CAM_DBG(CAM_CCI, "300 0x%x 30c 0x%x cci%d m0q0",
+			readreg_val, readreg_val1, cci_dev->soc_info.index); 
+
 		spin_unlock_irqrestore(
 			&cci_dev->cci_master_info[MASTER_0].lock_q[QUEUE_0],
 			flags);
@@ -145,6 +165,15 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 			complete(&cci_master_info->report_q[QUEUE_1]);
 			atomic_set(&cci_master_info->done_pending[QUEUE_1], 0);
 		}
+		reg_offset = DEBUG_MASTER_QUEUE_REG_START +  MASTER_0*0x200 + 
+			QUEUE_1*0x100;
+		readreg_val = cam_io_r_mb(base + reg_offset);
+		reg_offset1 = DEBUG_MASTER_QUEUE_REG_START +  MASTER_0*0x200 +
+			QUEUE_1*0x100 + 3 * 4;
+		readreg_val1 = cam_io_r_mb(base + reg_offset1);
+		CAM_DBG(CAM_CCI, "300 0x%x 30c 0x%x cci%d m0q1",
+		readreg_val, readreg_val1, cci_dev->soc_info.index); 
+
 		spin_unlock_irqrestore(
 			&cci_dev->cci_master_info[MASTER_0].lock_q[QUEUE_1],
 			flags);
@@ -223,33 +252,67 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 	}
 	if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_ERROR_BMSK) {
 		cci_dev->cci_master_info[MASTER_0].status = -EINVAL;
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_NACK_ERROR_BMSK)
-			CAM_ERR(CAM_CCI, "Base:%pK, M0 NACK ERROR: 0x%x",
-				base, irq_status0);
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_Q0_NACK_ERROR_BMSK) {
+			CAM_ERR(CAM_CCI,
+				"Base:%pK,cci: %d, M0_Q0 NACK ERROR: 0x%x",
+				base, cci_dev->soc_info.index, irq_status0);
+			cam_cci_dump_registers(cci_dev, MASTER_0,
+					QUEUE_0);
+			complete_all(&cci_dev->cci_master_info[MASTER_0]
+				.report_q[QUEUE_0]);
+		}
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_Q1_NACK_ERROR_BMSK) {
+			CAM_ERR(CAM_CCI,
+				"Base:%pK,cci: %d, M0_Q1 NACK ERROR: 0x%x",
+				base, cci_dev->soc_info.index, irq_status0);
+			cam_cci_dump_registers(cci_dev, MASTER_0,
+					QUEUE_1);
+			complete_all(&cci_dev->cci_master_info[MASTER_0]
+			.report_q[QUEUE_1]);
+		}
 		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_Q0Q1_ERROR_BMSK)
 			CAM_ERR(CAM_CCI,
-			"Base:%pK, M0 QUEUE_OVER/UNDER_FLOW OR CMD ERR: 0x%x",
-				base, irq_status0);
+			"Base:%pK, cci: %d, M0 QUEUE_OVER/UNDER_FLOW OR CMD ERR: 0x%x",
+				base, cci_dev->soc_info.index, irq_status0);
 		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_RD_ERROR_BMSK)
 			CAM_ERR(CAM_CCI,
 				"Base: %pK, M0 RD_OVER/UNDER_FLOW ERROR: 0x%x",
 				base, irq_status0);
-		cam_io_w_mb(CCI_M0_HALT_REQ_RMSK, base + CCI_HALT_REQ_ADDR);
+
+		cci_dev->cci_master_info[MASTER_0].reset_pending = true;
+		cam_io_w_mb(CCI_M0_RESET_RMSK, base + CCI_RESET_CMD_ADDR);
 	}
 	if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_ERROR_BMSK) {
 		cci_dev->cci_master_info[MASTER_1].status = -EINVAL;
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_NACK_ERROR_BMSK)
-			CAM_ERR(CAM_CCI, "Base:%pK, M1 NACK ERROR: 0x%x",
-				base, irq_status0);
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_Q0Q1_ERROR_BMSK)
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_Q0_NACK_ERROR_BMSK) {
 			CAM_ERR(CAM_CCI,
-			"Base:%pK, M1 QUEUE_OVER_UNDER_FLOW OR CMD ERROR:0x%x",
-				base, irq_status0);
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_RD_ERROR_BMSK)
+				"Base:%pK, cci: %d, M1_Q0 NACK ERROR: 0x%x",
+				base, cci_dev->soc_info.index, irq_status0);
+			cam_cci_dump_registers(cci_dev, MASTER_1,
+					QUEUE_0);
+			complete_all(&cci_dev->cci_master_info[MASTER_1]
+			.report_q[QUEUE_0]);
+		}
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_Q1_NACK_ERROR_BMSK) {
 			CAM_ERR(CAM_CCI,
-				"Base:%pK, M1 RD_OVER/UNDER_FLOW ERROR: 0x%x",
-				base, irq_status0);
-		cam_io_w_mb(CCI_M1_HALT_REQ_RMSK, base + CCI_HALT_REQ_ADDR);
+				"Base:%pK, cci: %d, M1_Q1 NACK ERROR: 0x%x",
+				base, cci_dev->soc_info.index, irq_status0);
+			cam_cci_dump_registers(cci_dev, MASTER_1,
+				QUEUE_1);
+			complete_all(&cci_dev->cci_master_info[MASTER_1]
+			.report_q[QUEUE_1]);
+		}
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_Q0Q1_ERROR_BMSK)
+			CAM_ERR(CAM_CCI,
+			"Base:%pK, cci: %d, M1 QUEUE_OVER_UNDER_FLOW OR CMD ERROR:0x%x",
+				base, cci_dev->soc_info.index, irq_status0);
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_RD_ERROR_BMSK)
+			CAM_ERR(CAM_CCI,
+				"Base:%pK, cci: %d, M1 RD_OVER/UNDER_FLOW ERROR: 0x%x",
+				base, cci_dev->soc_info.index, irq_status0);
+
+		cci_dev->cci_master_info[MASTER_1].reset_pending = true;
+		cam_io_w_mb(CCI_M1_RESET_RMSK, base + CCI_RESET_CMD_ADDR);
 	}
 
 	cam_io_w_mb(irq_status0, base + CCI_IRQ_CLEAR_0_ADDR);
@@ -369,6 +432,70 @@ static long cam_cci_subdev_fops_compat_ioctl(struct file *file,
 }
 #endif
 
+static int cam_cci_get_debug(void *data, u64 *val)
+{
+	struct cci_device *cci_dev = (struct cci_device *)data;
+
+	*val = cci_dev->dump_en;
+
+	return 0;
+}
+
+static int cam_cci_set_debug(void *data, u64 val)
+{
+	struct cci_device *cci_dev = (struct cci_device *)data;
+
+	cci_dev->dump_en = val;
+
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(cam_cci_debug,
+	cam_cci_get_debug,
+	cam_cci_set_debug, "%16llu\n");
+
+static int cam_cci_create_debugfs_entry(struct cci_device *cci_dev)
+{
+	int rc = 0;
+	struct dentry *dbgfileptr = NULL;
+
+	if (!debugfs_root) {
+		dbgfileptr = debugfs_create_dir("cam_cci", NULL);
+		if (!dbgfileptr) {
+			CAM_ERR(CAM_CCI, "debugfs directory creation fail");
+			rc = -ENOENT;
+			goto end;
+		}
+		debugfs_root = dbgfileptr;
+	}
+
+	if (cci_dev->soc_info.index == 0) {
+		dbgfileptr = debugfs_create_file("en_dump_cci0", 0644,
+			debugfs_root, cci_dev, &cam_cci_debug);
+		if (IS_ERR(dbgfileptr)) {
+			if (PTR_ERR(dbgfileptr) == -ENODEV)
+				CAM_WARN(CAM_CCI, "DebugFS not enabled");
+			else {
+				rc = PTR_ERR(dbgfileptr);
+				goto end;
+			}
+		}
+	} else {
+		dbgfileptr = debugfs_create_file("en_dump_cci1", 0644,
+			debugfs_root, cci_dev, &cam_cci_debug);
+		if (IS_ERR(dbgfileptr)) {
+			if (PTR_ERR(dbgfileptr) == -ENODEV)
+				CAM_WARN(CAM_CCI, "DebugFS not enabled");
+			else {
+				rc = PTR_ERR(dbgfileptr);
+				goto end;
+			}
+		}
+	}
+end:
+	return rc;
+}
+
 static int cam_cci_platform_probe(struct platform_device *pdev)
 {
 	struct cam_cpas_register_params cpas_parms;
@@ -391,7 +518,7 @@ static int cam_cci_platform_probe(struct platform_device *pdev)
 
 	rc = cam_cci_parse_dt_info(pdev, new_cci_dev);
 	if (rc < 0) {
-		CAM_ERR(CAM_CCI, "Resource get Failed: %d", rc);
+		CAM_ERR(CAM_CCI, "Resource get Failed rc:%d", rc);
 		goto cci_no_resource;
 	}
 
@@ -403,8 +530,7 @@ static int cam_cci_platform_probe(struct platform_device *pdev)
 		sizeof(new_cci_dev->device_name));
 	new_cci_dev->v4l2_dev_str.name =
 		new_cci_dev->device_name;
-	new_cci_dev->v4l2_dev_str.sd_flags =
-		(V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS);
+	new_cci_dev->v4l2_dev_str.sd_flags = V4L2_SUBDEV_FL_HAS_EVENTS;
 	new_cci_dev->v4l2_dev_str.ent_function =
 		CAM_CCI_DEVICE_TYPE;
 	new_cci_dev->v4l2_dev_str.token =
@@ -412,7 +538,7 @@ static int cam_cci_platform_probe(struct platform_device *pdev)
 
 	rc = cam_register_subdev(&(new_cci_dev->v4l2_dev_str));
 	if (rc < 0) {
-		CAM_ERR(CAM_CCI, "Fail with cam_register_subdev");
+		CAM_ERR(CAM_CCI, "Fail with cam_register_subdev rc: %d", rc);
 		goto cci_no_resource;
 	}
 
@@ -442,14 +568,24 @@ static int cam_cci_platform_probe(struct platform_device *pdev)
 	strlcpy(cpas_parms.identifier, "cci", CAM_HW_IDENTIFIER_LENGTH);
 	rc = cam_cpas_register_client(&cpas_parms);
 	if (rc) {
-		CAM_ERR(CAM_CCI, "CPAS registration failed");
-		goto cci_no_resource;
+		CAM_ERR(CAM_CCI, "CPAS registration failed rc:%d", rc);
+		goto cci_unregister_subdev;
 	}
+
 	CAM_DBG(CAM_CCI, "CPAS registration successful handle=%d",
 		cpas_parms.client_handle);
 	new_cci_dev->cpas_handle = cpas_parms.client_handle;
 
+	rc = cam_cci_create_debugfs_entry(new_cci_dev);
+	if (rc) {
+		CAM_WARN(CAM_CCI, "debugfs creation failed");
+		rc = 0;
+	}
+	CAM_DBG(CAM_CCI, "Component bound successfully");
 	return rc;
+
+cci_unregister_subdev:
+	cam_unregister_subdev(&(new_cci_dev->v4l2_dev_str));
 cci_no_resource:
 	kfree(new_cci_dev);
 	return rc;
@@ -462,6 +598,7 @@ static int cam_cci_device_remove(struct platform_device *pdev)
 		v4l2_get_subdevdata(subdev);
 
 	cam_cpas_unregister_client(cci_dev->cpas_handle);
+	debugfs_remove_recursive(debugfs_root);
 	cam_cci_soc_remove(pdev, cci_dev);
 	devm_kfree(&pdev->dev, cci_dev);
 	return 0;

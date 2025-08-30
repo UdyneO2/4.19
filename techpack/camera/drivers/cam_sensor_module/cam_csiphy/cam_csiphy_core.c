@@ -283,7 +283,7 @@ int32_t cam_cmd_buf_parser(struct csiphy_device *csiphy_dev,
 		csiphy_dev->csiphy_info.lane_mask
 	);
 	CAM_DBG(CAM_CSIPHY,
-		"3phase:%d, combo mode:%llu, secure mode:%llu",
+		"3phase:%d, combo mode:%d, secure mode:%d",
 		csiphy_dev->csiphy_info.csiphy_3phase,
 		csiphy_dev->csiphy_info.combo_mode,
 		cam_cmd_csiphy_info->secure_mode
@@ -589,28 +589,36 @@ int32_t cam_csiphy_config_dev(struct csiphy_device *csiphy_dev)
 	return rc;
 }
 
+void cam_csiphy_clear_secbits(struct csiphy_device *csiphy_dev)
+{
+	int32_t i = 0;
+
+	for (i = 0; i < csiphy_dev->acquire_count; i++) {
+		if (csiphy_dev->csiphy_info.secure_mode[i])
+			cam_csiphy_notify_secure_mode(
+					csiphy_dev,
+					CAM_SECURE_MODE_NON_SECURE, i);
+
+		csiphy_dev->csiphy_info.secure_mode[i] =
+			CAM_SECURE_MODE_NON_SECURE;
+
+		csiphy_dev->csiphy_cpas_cp_reg_mask[i] = 0;
+	}
+}
+
 void cam_csiphy_shutdown(struct csiphy_device *csiphy_dev)
 {
 	struct cam_hw_soc_info *soc_info;
-	int32_t i = 0;
 
 	if (csiphy_dev->csiphy_state == CAM_CSIPHY_INIT)
 		return;
 
+	/*
+	 * clear the secure bits if the provider crashed
+	 */
+	cam_csiphy_clear_secbits(csiphy_dev);
 	if (csiphy_dev->csiphy_state == CAM_CSIPHY_START) {
 		soc_info = &csiphy_dev->soc_info;
-
-		for (i = 0; i < csiphy_dev->acquire_count; i++) {
-			if (csiphy_dev->csiphy_info.secure_mode[i])
-				cam_csiphy_notify_secure_mode(
-					csiphy_dev,
-					CAM_SECURE_MODE_NON_SECURE, i);
-
-			csiphy_dev->csiphy_info.secure_mode[i] =
-				CAM_SECURE_MODE_NON_SECURE;
-
-			csiphy_dev->csiphy_cpas_cp_reg_mask[i] = 0;
-		}
 
 		cam_csiphy_reset(csiphy_dev);
 		cam_soc_util_disable_platform_resource(soc_info, true, true);
@@ -766,6 +774,7 @@ int32_t cam_csiphy_core_cfg(void *phy_dev,
 		bridge_params.v4l2_sub_dev_flag = 0;
 		bridge_params.media_entity_flag = 0;
 		bridge_params.priv = csiphy_dev;
+		bridge_params.dev_id = CAM_CSIPHY;
 
 		if (csiphy_acq_params.combo_mode >= 2) {
 			CAM_ERR(CAM_CSIPHY, "Invalid combo_mode %d",
