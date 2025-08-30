@@ -260,6 +260,16 @@ config ARCH_R8A77980
 	help
 	  This enables support for the Renesas R-Car V3H SoC.
 
+# huzhonghua_wt@ODM_WT.BSP.Kernel.Boot.Bugid,2020/08/20,Add for ODM_WT_EDIT macro for kernel usage
+config ODM_WT_EDIT
+	bool "Enable Support for ODM WT Projects"
+	depends on ARCH_QCOM
+	select CPU_FREQ_QCOM
+	select COMMON_CLK_MSM
+	help
+	  This enables support for the ODM Wingtech projects. If you do not
+	  wish to build a kernel that runs on this chipset, say 'N' here.
+
 config ARCH_R8A77990
 	bool "Renesas R-Car E3 SoC Platform"
 	depends on ARCH_RENESAS

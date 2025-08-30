@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -13,6 +13,10 @@
 #include <linux/regulator/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#include <wt_sys/wt_boot_reason.h>
+//#endif
 
 #include <linux/msm-bus-board.h>
 #include <linux/msm-bus.h>
@@ -24,7 +28,6 @@
 
 #include <linux/soc/qcom/smem.h>
 #include <linux/soc/qcom/smem_state.h>
-#include <linux/oem/project_info.h>
 
 #include "peripheral-loader.h"
 
@@ -718,6 +721,12 @@ static int pil_shutdown_trusted(struct pil_desc *pil)
 	u32 proc, scm_ret = 0;
 	int rc;
 	struct scm_desc desc = {0};
+	#ifdef VENDOR_EDIT
+	//Wentiam.Mai@PSW.NW.EM.1389836, 2019/04/27
+	//Add for skip mini dump encryption
+	int i = 0;
+	struct md_ss_toc *toc = NULL;
+	#endif
 
 	if (d->subsys_desc.no_auth)
 		return 0;
@@ -739,9 +748,40 @@ static int pil_shutdown_trusted(struct pil_desc *pil)
 	if (rc)
 		goto err_clks;
 
+	#ifdef VENDOR_EDIT
+	//Wentiam.Mai@PSW.NW.EM.1389836, 2019/04/27
+	//Add for skip mini dump encryption
+	//disable for TZ don't encryption
+	if ( pil->minidump_id ==3 ) {  //only check for modem . currently 3 is modem
+		pil->minidump_ss->md_ss_enable_status = 0;
+		pil->minidump_ss->encryption_status = 0;
+
+		for ( i = 0; i < pil->num_aux_minidump_ids; i++ ) {
+			toc = pil->aux_minidump[i];
+			toc->md_ss_enable_status = 0;
+			toc->encryption_status  = 0;
+		}
+	}
+	#endif
 	rc = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_SHUTDOWN_CMD),
 		       &desc);
 	scm_ret = desc.ret[0];
+	#ifdef VENDOR_EDIT
+	//Wentiam.Mai@PSW.NW.EM.1389836, 2019/04/27
+	//Add for skip mini dump encryption
+	//disable for TZ don't encryption
+	//set back for miindump flow
+	if( pil->minidump_id == 3 ) {  //only check for modem . currently 3 is modem
+		pil->minidump_ss->md_ss_enable_status  =MD_SS_ENABLED;
+		pil->minidump_ss->encryption_status =MD_SS_ENCR_DONE;
+
+		for (i = 0; i < pil->num_aux_minidump_ids; i++) {
+			toc = pil->aux_minidump[i];
+			toc->md_ss_enable_status = MD_SS_ENABLED;
+			toc->encryption_status  = MD_SS_ENCR_DONE;
+		}
+	}
+	#endif
 
 	disable_unprepare_clocks(d->proxy_clks, d->proxy_clk_count);
 	disable_regulators(d, d->proxy_regs, d->proxy_reg_count, false);
@@ -796,10 +836,24 @@ static struct pil_reset_ops pil_ops_trusted = {
 	.deinit_image = pil_deinit_image_trusted,
 };
 
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability.1941873, 2020/09/03, Add for display boot reason
+#ifdef CONFIG_WT_BOOT_REASON
+char subsys_restart_reason[WT_MAX_SSR_REASON_LEN];
+#endif
+//#endif
+
+#define subsys_to_drv(d) container_of(d, struct modem_data, subsys_desc)
+#ifdef VENDOR_EDIT
+//Wentiam.Mai@PSW.NW.EM.1248599, 2018/01/25
+//Add for customized subsystem ramdump to skip generate dump cause by SAU
+bool SKIP_GENERATE_RAMDUMP = false;
+extern void mdmreason_set(char * buf);
+#endif
 static void log_failure_reason(const struct pil_tz_data *d)
 {
 	size_t size;
-	char *smem_reason, reason[MAX_SSR_REASON_LEN], *function_name;
+	char *smem_reason, reason[MAX_SSR_REASON_LEN];
 	const char *name = d->subsys_desc.name;
 
 	if (d->smem_id == -1)
@@ -817,11 +871,26 @@ static void log_failure_reason(const struct pil_tz_data *d)
 	}
 
 	strlcpy(reason, smem_reason, min(size, (size_t)MAX_SSR_REASON_LEN));
-	function_name = parse_function_builtin_return_address((unsigned long)
-						__builtin_return_address(0));
-	save_dump_reason_to_smem(reason, function_name);
 	pr_err("%s subsystem failure reason: %s.\n", name, reason);
-	subsys_store_crash_reason(d->subsys, reason);
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#ifdef CONFIG_WT_BOOT_REASON
+	strlcpy(subsys_restart_reason, smem_reason, min(size, (size_t)WT_MAX_SSR_REASON_LEN));
+#endif
+//#endif
+    #ifdef VENDOR_EDIT
+    //Wentiam.Mai@PSW.NW.EM.1248599, 2018/01/25
+    //Add for customized subsystem ramdump to skip generate dump cause by SAU
+    if (!strncmp(name, "modem", 4)) {
+        mdmreason_set(reason);
+        pr_err("oppo debug modem subsystem failure reason: %s.\n", reason);
+
+        if(strstr(reason, "OPPO_MODEM_NO_RAMDUMP_EXPECTED") || strstr(reason, "oppomsg:go_to_error_fatal")){
+            pr_err("%s will subsys reset",__func__);
+            SKIP_GENERATE_RAMDUMP = true;
+        }
+    }
+    #endif
 }
 
 static int subsys_shutdown(const struct subsys_desc *subsys, bool force_stop)
@@ -980,7 +1049,7 @@ static void clear_pbl_done(struct pil_tz_data *d)
 		pr_err("PBL error status spare2 register: 0x%08x\n",
 			rmb_err_spare2);
 	} else {
-		pr_info("PBL_DONE - 1st phase loading [%s] completed finish\n",
+		pr_info("PBL_DONE - 1st phase loading [%s] completed ok\n",
 			d->subsys_desc.name);
 	}
 	__raw_writel(BIT(d->bits_arr[PBL_DONE]), d->irq_clear);
@@ -991,7 +1060,7 @@ static void clear_err_ready(struct pil_tz_data *d)
 	pr_debug("Subsystem error services up received from %s\n",
 							d->subsys_desc.name);
 
-	pr_info("SW_INIT_DONE - 2nd phase loading [%s] completed finish\n",
+	pr_info("SW_INIT_DONE - 2nd phase loading [%s] completed ok\n",
 		d->subsys_desc.name);
 
 	__raw_writel(BIT(d->bits_arr[ERR_READY]), d->irq_clear);
@@ -1241,9 +1310,6 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 			goto err_ramdump;
 		}
 	}
-
-	d->desc.sequential_loading = of_property_read_bool(pdev->dev.of_node,
-						"qcom,sequential-fw-load");
 
 	d->ramdump_dev = create_ramdump_device(d->subsys_desc.name,
 								&pdev->dev);

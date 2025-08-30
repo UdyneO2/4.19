@@ -144,9 +144,14 @@ struct notif_data {
 
 #if defined(CONFIG_MSM_SUBSYSTEM_RESTART)
 
+#ifdef VENDOR_EDIT
+/*Jianfeng.Qiu@PSW.MM.AudioDriver.ADSP.2434874, 2019/11/26, Add for workaround fix adsp stuck issue*/
+extern void oppo_set_ssr_state(bool ssr_state);
+extern bool oppo_get_ssr_state(void);
+#endif /* VENDOR_EDIT */
+
 extern int subsys_get_restart_level(struct subsys_device *dev);
 extern int subsystem_restart_dev(struct subsys_device *dev);
-extern void subsys_store_crash_reason(struct subsys_device *dev, char *reason);
 extern int subsystem_restart(const char *name);
 extern int subsystem_crashed(const char *name);
 
@@ -171,6 +176,15 @@ struct subsys_device *find_subsys_device(const char *str);
 extern int wait_for_shutdown_ack(struct subsys_desc *desc);
 #else
 
+#ifdef VENDOR_EDIT
+/*Jianfeng.Qiu@PSW.MM.AudioDriver.ADSP.2434874, 2019/11/26, Add for workaround fix adsp stuck issue*/
+static inline void oppo_set_ssr_state(bool ssr_state) { }
+static inline bool oppo_get_ssr_state(void)
+{
+	return false;
+}
+#endif /* VENDOR_EDIT */
+
 static inline int subsys_get_restart_level(struct subsys_device *dev)
 {
 	return 0;
@@ -180,9 +194,6 @@ static inline int subsystem_restart_dev(struct subsys_device *dev)
 {
 	return 0;
 }
-
-static inline void subsys_store_crash_reason(struct subsys_device *dev,
-					     char *reason) { }
 
 static inline int subsystem_restart(const char *name)
 {

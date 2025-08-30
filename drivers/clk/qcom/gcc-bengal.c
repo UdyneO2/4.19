@@ -1433,6 +1433,7 @@ static struct clk_rcg2 gcc_pdm2_clk_src = {
 
 static const struct freq_tbl ftbl_gcc_qupv3_wrap0_s0_clk_src[] = {
 	F(7372800, P_GPLL0_OUT_AUX2, 1, 384, 15625),
+	F(8000000, P_GPLL0_OUT_AUX2, 3, 8, 100),
 	F(14745600, P_GPLL0_OUT_AUX2, 1, 768, 15625),
 	F(19200000, P_BI_TCXO, 1, 0, 0),
 	F(29491200, P_GPLL0_OUT_AUX2, 1, 1536, 15625),
@@ -1650,7 +1651,7 @@ static const struct freq_tbl ftbl_gcc_sdcc2_apps_clk_src[] = {
 	F(25000000, P_GPLL0_OUT_AUX2, 12, 0, 0),
 	F(50000000, P_GPLL0_OUT_AUX2, 6, 0, 0),
 	F(100000000, P_GPLL0_OUT_AUX2, 3, 0, 0),
-	F(200000000, P_GPLL0_OUT_EARLY, 3, 0, 0),
+	F(202000000, P_GPLL7_OUT_MAIN, 4, 0, 0),
 	{ }
 };
 
@@ -1670,7 +1671,7 @@ static struct clk_rcg2 gcc_sdcc2_apps_clk_src = {
 		.num_rate_max = VDD_NUM,
 		.rate_max = (unsigned long[VDD_NUM]) {
 			[VDD_LOWER] = 100000000,
-			[VDD_LOW_L1] = 200000000},
+			[VDD_LOW_L1] = 202000000},
 	},
 };
 

@@ -37,6 +37,7 @@
 #include "sdhci-msm-ice.h"
 #include "sdhci-pltfm.h"
 #include "cqhci.h"
+#include <linux/proc_fs.h>
 
 #define QOS_REMOVE_DELAY_MS	10
 #define CORE_POWER		0x0
@@ -439,6 +440,45 @@ err:
 	pr_err("%s: %s: failed\n", mmc_hostname(host->mmc), __func__);
 out:
 	return rc;
+}
+
+static int sdhci_irq_gpio = 0;
+
+static int card_tray_status_show(struct seq_file *m, void *v)
+{
+	int gpio_value = 0;
+	gpio_value = gpio_get_value_cansleep(sdhci_irq_gpio);
+	pr_debug("%s: get gpio %d value is %d\n",
+		__func__, sdhci_irq_gpio, gpio_value);
+	seq_printf(m, "%d\n", gpio_value);
+	return 0;
+}
+
+static int tray_status_entry_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, card_tray_status_show, NULL);
+}
+
+static const struct file_operations card_tray_status_fops = {
+	.open = tray_status_entry_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static int card_tray_detect_create_proc(void)
+{
+	struct proc_dir_entry *trey_status_entry;
+	trey_status_entry = proc_create("sd_tray_gpio_value", 0444, NULL, &card_tray_status_fops);
+	if (!trey_status_entry) {
+		return 1;
+	}
+	return 0;
+}
+
+static void card_tray_detect_remove_proc(void)
+{
+	remove_proc_entry("sd_tray_gpio_value", NULL);
 }
 
 static ssize_t store_auto_cmd21(struct device *dev, struct device_attribute
@@ -1304,7 +1344,7 @@ static ssize_t store_mask_and_match(struct device *dev,
 	unsigned long value;
 	char *token;
 	int i = 0;
-	u32 mask = 0, match = 0, bit_shift = 0, testbus = 0;
+	u32 mask, match, bit_shift, testbus;
 
 	char *temp = (char *)buf;
 
@@ -2259,6 +2299,7 @@ struct sdhci_msm_pltfm_data *sdhci_msm_populate_pdata(struct device *dev,
 		goto out;
 
 	pdata->status_gpio = of_get_named_gpio_flags(np, "cd-gpios", 0, &flags);
+	sdhci_irq_gpio = pdata->status_gpio;
 	if (gpio_is_valid(pdata->status_gpio) && !(flags & OF_GPIO_ACTIVE_LOW))
 		pdata->caps2 |= MMC_CAP2_CD_ACTIVE_HIGH;
 
@@ -5414,7 +5455,6 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	void __iomem *tlmm_mem;
 	unsigned long flags;
 	bool force_probe;
-	u32 minor;
 
 	pr_debug("%s: Enter %s\n", dev_name(&pdev->dev), __func__);
 	msm_host = devm_kzalloc(&pdev->dev, sizeof(struct sdhci_msm_host),
@@ -5433,6 +5473,7 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	}
 	msm_host_offset = msm_host->offset;
 	msm_host->sdhci_msm_pdata.ops = &sdhci_msm_ops;
+
 	host = sdhci_pltfm_init(pdev, &msm_host->sdhci_msm_pdata, 0);
 	if (IS_ERR(host)) {
 		ret = PTR_ERR(host);
@@ -5719,9 +5760,6 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	if (host->quirks2 & SDHCI_QUIRK2_ALWAYS_USE_BASE_CLOCK)
 		host->quirks2 |= SDHCI_QUIRK2_DIVIDE_TOUT_BY_4;
 
-	minor = IPCAT_MINOR_MASK(readl_relaxed(host->ioaddr +
-				SDCC_IP_CATALOG));
-
 	host_version = readw_relaxed((host->ioaddr + SDHCI_HOST_VERSION));
 	dev_dbg(&pdev->dev, "Host Version: 0x%x Vendor Version 0x%x\n",
 		host_version, ((host_version & SDHCI_VENDOR_VER_MASK) >>
@@ -5929,7 +5967,8 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		device_remove_file(&pdev->dev, &msm_host->auto_cmd21_attr);
 	}
 
-	if (minor >= 2) {
+	if (IPCAT_MINOR_MASK(readl_relaxed(host->ioaddr +
+				SDCC_IP_CATALOG)) >= 2) {
 		msm_host->mask_and_match.show = show_mask_and_match;
 		msm_host->mask_and_match.store = store_mask_and_match;
 		sysfs_attr_init(&msm_host->mask_and_match.attr);
@@ -5945,6 +5984,14 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 
 	if (sdhci_msm_is_bootdevice(&pdev->dev))
 		mmc_flush_detect_work(host->mmc);
+
+	if (!strcmp(mmc_hostname(host->mmc), "mmc1")) {
+		ret = card_tray_detect_create_proc();
+		if (ret) {
+			pr_err("%s: %s: failed creating card tray detect attr: %d\n",
+				mmc_hostname(host->mmc), __func__, ret);
+		}
+	}
 	/* Successful initialization */
 	goto out;
 
@@ -6045,6 +6092,10 @@ static int sdhci_msm_remove(struct platform_device *pdev)
 	sdhci_msm_bus_voting(host, 0);
 	if (msm_host->msm_bus_vote.client_handle)
 		sdhci_msm_bus_unregister(msm_host);
+
+	if (!strcmp(mmc_hostname(host->mmc), "mmc1")) {
+		card_tray_detect_remove_proc();
+	}
 
 	sdhci_pltfm_free(pdev);
 

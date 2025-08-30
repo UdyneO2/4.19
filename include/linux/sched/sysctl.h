@@ -16,6 +16,14 @@ extern int sysctl_hung_task_selective_monitoring;
 extern int proc_dohung_task_timeout_secs(struct ctl_table *table, int write,
 					 void __user *buffer,
 					 size_t *lenp, loff_t *ppos);
+#ifdef VENDOR_EDIT
+#ifdef CONFIG_DEATH_HEALER
+/* Bin.Xu@BSP.Kernel.Stability, 2020/05/23, DeathHealer, record the hung task killing */
+extern char sysctl_hung_task_oppo_kill[];
+extern int sysctl_hung_task_maxiowait_count;
+#endif
+#endif /* VENDOR_EDIT */
+
 #else
 /* Avoid need for ifdefs elsewhere in the code */
 enum { sysctl_hung_task_timeout_secs = 0 };
@@ -41,7 +49,6 @@ extern unsigned int sysctl_sched_boost;
 extern unsigned int sysctl_sched_group_upmigrate_pct;
 extern unsigned int sysctl_sched_group_downmigrate_pct;
 extern unsigned int sysctl_sched_conservative_pl;
-extern unsigned int sysctl_sched_skip_affinity;
 extern unsigned int sysctl_sched_many_wakeup_threshold;
 extern unsigned int sysctl_sched_walt_rotate_big_tasks;
 extern unsigned int sysctl_sched_min_task_util_for_boost;

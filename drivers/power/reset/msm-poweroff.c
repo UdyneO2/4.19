@@ -26,6 +26,10 @@
 #include <soc/qcom/restart.h>
 #include <soc/qcom/watchdog.h>
 #include <soc/qcom/minidump.h>
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#include <wt_sys/wt_boot_reason.h>
+//#endif
 
 #define EMERGENCY_DLOAD_MAGIC1    0x322A4F99
 #define EMERGENCY_DLOAD_MAGIC2    0xC67E4350
@@ -66,7 +70,14 @@ static int download_mode = 1;
 static struct kobject dload_kobj;
 
 static int in_panic;
+
+#ifndef VENDOR_EDIT
+//Bin.Xu@BSP.Kernel.Stability, 2020/4/4, add checklist: minidump
 static int dload_type = SCM_DLOAD_FULLDUMP;
+#else
+int dload_type = SCM_DLOAD_FULLDUMP;
+#endif
+
 static void *dload_mode_addr;
 static bool dload_mode_enabled;
 static void *emergency_dload_mode_addr;
@@ -162,6 +173,39 @@ int scm_set_dload_mode(int arg1, int arg2)
 				&desc);
 }
 
+#ifdef VENDOR_EDIT
+// Bin.Xu@BSP.Kernel.Stability, 2020/4/4, add checklist: minidump
+void oppo_switch_fulldump(int on)
+{
+	int ret;
+
+	if (dload_mode_addr) {
+		__raw_writel(0xE47B337D, dload_mode_addr);
+		__raw_writel(0xCE14091A,
+			dload_mode_addr + sizeof(unsigned int));
+		mb();
+	}
+	if(on){
+		ret = scm_set_dload_mode(SCM_DLOAD_FULLDUMP, 0);
+		if (ret)
+			pr_err("Failed to set secure DLOAD mode: %d\n", ret);
+		dload_type = SCM_DLOAD_FULLDUMP;
+	}else{
+		ret = scm_set_dload_mode(SCM_DLOAD_MINIDUMP, 0);
+		if (ret)
+			pr_err("Failed to set secure DLOAD mode: %d\n", ret);
+		dload_type = SCM_DLOAD_MINIDUMP;
+	}
+
+	if(dload_type == SCM_DLOAD_MINIDUMP)
+		__raw_writel(EMMC_DLOAD_TYPE, dload_type_addr);
+	else
+		__raw_writel(0, dload_type_addr);
+	dload_mode_enabled = on;
+}
+EXPORT_SYMBOL(oppo_switch_fulldump);
+#endif /*VENDOR_EDIT*/
+
 static void set_dload_mode(int on)
 {
 	int ret;
@@ -178,6 +222,15 @@ static void set_dload_mode(int on)
 	if (ret)
 		pr_err("Failed to set secure DLOAD mode: %d\n", ret);
 
+
+#ifdef VENDOR_EDIT
+// Bin.Xu@BSP.Kernel.Stability, 2020/4/4, add checklist: minidump
+	if(dload_type == SCM_DLOAD_MINIDUMP)
+		__raw_writel(EMMC_DLOAD_TYPE, dload_type_addr);
+	else
+		__raw_writel(0, dload_type_addr);
+#endif /*VENDOR_EDIT*/
+
 	dload_mode_enabled = on;
 }
 
@@ -186,15 +239,22 @@ static bool get_dload_mode(void)
 	return dload_mode_enabled;
 }
 
-void oem_force_minidump_mode(void)
+#ifdef VENDOR_EDIT
+/*Jianfeng.Qiu@PSW.MM.AudioDriver.ADSP.2434874, 2019/11/26, Add for adsp issue*/
+bool is_fulldump_on(void)
 {
-	if (dload_type == SCM_DLOAD_FULLDUMP) {
-		pr_err("force minidump mode\n");
-		dload_type = SCM_DLOAD_MINIDUMP;
-		set_dload_mode(dload_type);
-		__raw_writel(EMMC_DLOAD_TYPE, dload_type_addr);
-	}
+	return download_mode && (dload_type & SCM_DLOAD_FULLDUMP);
 }
+EXPORT_SYMBOL(is_fulldump_on);
+#endif /* VENDOR_EDIT */
+
+#ifdef VENDOR_EDIT
+/* yanwu@TECH.Storage.FS 2019/09/13, flush device cache in panic if necessary */
+bool is_fulldump_enable(void)
+{
+	return download_mode && (dload_type & SCM_DLOAD_FULLDUMP);
+}
+#endif
 
 static void enable_emergency_dload_mode(void)
 {
@@ -495,17 +555,42 @@ static void msm_restart_prepare(const char *cmd)
 		need_warm_reset = (get_dload_mode() ||
 				(cmd != NULL && cmd[0] != '\0'));
 	}
+#ifdef VENDOR_EDIT 
+//zhangchangan@PSW.BSP.CHG,add 2020/05/08 panic reboot reason as kernel for hotfix 
+	if (in_panic){
+		//warm reset
+		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
+		qpnp_pon_set_restart_reason(
+					PON_RESTART_REASON_KERNEL);
+		flush_cache_all();
 
+		/*outer_flush_all is not supported by 64bit kernel*/
+#ifndef CONFIG_ARM64
+		outer_flush_all();
+#endif
+		return;
+	}
+#endif /* VENDOR_EDIT */
 	if (force_warm_reboot)
 		pr_info("Forcing a warm reset of the system\n");
 
 	/* Hard reset the PMIC unless memory contents must be maintained. */
-	if (force_warm_reboot || need_warm_reset)
+	if (force_warm_reboot || need_warm_reset){
+		pr_err(" warm reset \n");
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
-	else
+	}
+	else{
+		pr_err(" hard reset \n");
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
+	}
 
 	if (cmd != NULL) {
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#ifdef CONFIG_WT_BOOT_REASON
+		set_reset_magic(RESET_MAGIC_CMD_REBOOT);
+#endif
+//#endif
 		if (!strncmp(cmd, "bootloader", 10)) {
 			qpnp_pon_set_restart_reason(
 				PON_RESTART_REASON_BOOTLOADER);
@@ -530,25 +615,23 @@ static void msm_restart_prepare(const char *cmd)
 			qpnp_pon_set_restart_reason(
 				PON_RESTART_REASON_KEYS_CLEAR);
 			__raw_writel(0x7766550a, restart_reason);
-		//dylan.chang@BSP.TECH.AgingTest, 2019/01/07,Add for factory agingtest
-		} else if (!strcmp(cmd, "sbllowmemtest")) {
-			pr_info("[op aging mem test] lunch ddr sbllowmemtest!!comm: %s, pid: %d\n"
-				, current->comm, current->pid);
+		#ifdef VENDOR_EDIT
+		//Xiaofan.Yang@PSW.TECH.AgingTest, 2019/01/07,Add for factory agingtest
+		} else if(!strcmp(cmd, "sbllowmemtest")){
 			qpnp_pon_set_restart_reason(
 					PON_RESTART_REASON_SBL_DDR_CUS);
 			__raw_writel(0x7766550b, restart_reason);
-		} else if (!strcmp(cmd, "sblmemtest")) {//op factory aging test
-			pr_info("[op aging mem test] lunch ddr sblmemtest!!comm: %s, pid: %d\n"
-				, current->comm, current->pid);
+		}else if (!strcmp(cmd, "sblmemtest")){//oppo factory aging test
+			printk("[%s:%d] lunch ddr test!!\n", current->comm, current->pid);
 			qpnp_pon_set_restart_reason(
 					PON_RESTART_REASON_SBL_DDRTEST);
 			__raw_writel(0x7766550b, restart_reason);
-		} else if (!strcmp(cmd, "usermemaging")) {
-			pr_info("[op aging mem test] lunch ddr usermemaging!!comm: %s, pid: %d\n"
-				, current->comm, current->pid);
+		} else if(!strcmp(cmd, "usermemaging")){
+			printk("[%s:%d] lunch user memory test!!\n", current->comm, current->pid);
 			qpnp_pon_set_restart_reason(
 					PON_RESTART_REASON_MEM_AGING);
 			__raw_writel(0x7766550b, restart_reason);
+		#endif
 		} else if (!strncmp(cmd, "oem-", 4)) {
 			unsigned long code;
 			int ret;
@@ -559,28 +642,55 @@ static void msm_restart_prepare(const char *cmd)
 					     restart_reason);
 		} else if (!strncmp(cmd, "edl", 3)) {
 			enable_emergency_dload_mode();
-		} else if (!strncmp(cmd, "rf", 2)) {
-			qpnp_pon_set_restart_reason(PON_RESTART_REASON_RF);
-			__raw_writel(RF_MODE, restart_reason);
+		}
+		#ifdef VENDOR_EDIT
+		/*ChaoYing.Chen@BSP.Kernel.Driver, 2020/04/22, Add for oppo boot mode*/
+		else if (!strncmp(cmd, "rf", 2)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_RF);
+		} else if (!strncmp(cmd, "wlan",4)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_WLAN);
+		#ifdef USE_MOS_MODE
+		} else if (!strncmp(cmd, "mos", 3)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_MOS);
+		#endif
 		} else if (!strncmp(cmd, "ftm", 3)) {
-			qpnp_pon_set_restart_reason(PON_RESTART_REASON_FACTORY);
-			__raw_writel(FACTORY_MODE, restart_reason);
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_FACTORY);
 		} else if (!strncmp(cmd, "kernel", 6)) {
-			qpnp_pon_set_restart_reason(PON_RESTART_REASON_KERNEL);
-			__raw_writel(KERNEL_MODE, restart_reason);
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_KERNEL);
 		} else if (!strncmp(cmd, "modem", 5)) {
-			qpnp_pon_set_restart_reason(PON_RESTART_REASON_MODEM);
-			__raw_writel(MODEM_MODE, restart_reason);
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_MODEM);
 		} else if (!strncmp(cmd, "android", 7)) {
-			qpnp_pon_set_restart_reason(PON_RESTART_REASON_ANDROID);
-			__raw_writel(ANDROID_MODE, restart_reason);
-		} else if (!strncmp(cmd, "aging", 5)) {
-			qpnp_pon_set_restart_reason(PON_RESTART_REASON_AGING);
-			__raw_writel(AGING_MODE, restart_reason);
-		} else {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_ANDROID);
+		} else if (!strncmp(cmd, "silence", 7)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_SILENCE);
+		} else if (!strncmp(cmd, "sau", 3)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_SAU);
+		} else if (!strncmp(cmd, "safe", 4)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_SAFE);
+		}
+		#endif
+		 else {
 			__raw_writel(0x77665501, restart_reason);
 		}
 	}
+	#ifdef VENDOR_EDIT
+	/*ChaoYing.Chen@BSP.Kernel.Driver, 2020/04/22, Add for oppo boot mode*/
+	else {
+		qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_NORMAL);
+	}
+	#endif
+
 	flush_cache_all();
 
 	/*outer_flush_all is not supported by 64bit kernel*/
@@ -709,14 +819,6 @@ static const struct of_device_id of_msm_restart_match[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, of_msm_restart_match);
-
-#ifdef CONFIG_PANIC_FLUSH
-int oem_get_download_mode(void)
-{
-	return download_mode && (dload_type & SCM_DLOAD_FULLDUMP);
-}
-EXPORT_SYMBOL(oem_get_download_mode);
-#endif
 
 static struct platform_driver msm_restart_driver = {
 	.probe = msm_restart_probe,

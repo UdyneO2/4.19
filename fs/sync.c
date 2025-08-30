@@ -17,9 +17,11 @@
 #include <linux/quotaops.h>
 #include <linux/backing-dev.h>
 #include "internal.h"
-#ifdef CONFIG_ONEPLUS_HEALTHINFO
-#include <linux/oem/oneplus_healthinfo.h>
-#endif
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
+// wenbin.liu@PSW.BSP.MM, 2018/05/02
+// Add for get cpu load
+#include <soc/oppo/oppo_healthinfo.h>
+#endif /*VENDOR_EDIT*/
 
 #define VALID_FLAGS (SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE| \
 			SYNC_FILE_RANGE_WAIT_AFTER)
@@ -215,28 +217,24 @@ int vfs_fsync(struct file *file, int datasync)
 }
 EXPORT_SYMBOL(vfs_fsync);
 
-#ifdef CONFIG_ONEPLUS_HEALTHINFO
-extern void ohm_schedstats_record(int sched_type, int fg, u64 delta_ms);
-#endif
-
 static int do_fsync(unsigned int fd, int datasync)
 {
 	struct fd f = fdget(fd);
 	int ret = -EBADF;
-
-#ifdef CONFIG_ONEPLUS_HEALTHINFO
-	unsigned long oneplus_fsync_time = jiffies;
-#endif
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
+// wenbin.liu@PSW.BSP.MM, 2018/08/06,  Add for record  fsync  time
+	unsigned long oppo_fsync_time = jiffies;
+#endif /*VENDOR_EDIT*/
 
 	if (f.file) {
 		ret = vfs_fsync(f.file, datasync);
 		fdput(f);
 		inc_syscfs(current);
 	}
-#ifdef CONFIG_ONEPLUS_HEALTHINFO
-	ohm_schedstats_record(OHM_SCHED_FSYNC, current_is_fg(),
-			jiffies_to_msecs(jiffies - oneplus_fsync_time));
-#endif
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
+// wenbin.liu@PSW.BSP.MM, 2018/08/06, Add for record  fsync  time
+	ohm_schedstats_record(OHM_SCHED_FSYNC,current, jiffies_to_msecs(jiffies - oppo_fsync_time));
+#endif /*VENDOR_EDIT*/
 	return ret;
 }
 

@@ -7,7 +7,11 @@
 #define __SCHGM_FLASH_H__
 
 #include <linux/bitops.h>
-#include "../../oneplus/charger_ic/oneplus_battery_pmi632.h"
+
+#ifdef VENDOR_EDIT
+/* Yichun.Chen  PSW.BSP.CHG  2019-07-10  for charge */
+#include "../../oppo/charger_ic/oppo_battery_sm4250Q.h"
+#endif
 
 #define SCHGM_FLASH_BASE			0xA600
 

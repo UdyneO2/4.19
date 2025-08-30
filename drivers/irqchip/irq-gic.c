@@ -1013,9 +1013,7 @@ static int gic_irq_domain_translate(struct irq_domain *d,
 		*type = fwspec->param[2] & IRQ_TYPE_SENSE_MASK;
 
 		/* Make it clear that broken DTs are... broken */
-		if (*type == IRQ_TYPE_NONE)
-			pr_info("1.Not triggering for this IRQ1\n");
-
+		WARN_ON(*type == IRQ_TYPE_NONE);
 		return 0;
 	}
 
@@ -1026,9 +1024,7 @@ static int gic_irq_domain_translate(struct irq_domain *d,
 		*hwirq = fwspec->param[0];
 		*type = fwspec->param[1];
 
-		if (*type == IRQ_TYPE_NONE)
-			pr_info("2.Not triggering for this IRQ2\n");
-
+		WARN_ON(*type == IRQ_TYPE_NONE);
 		return 0;
 	}
 

@@ -42,6 +42,7 @@
 #include "objsec.h"
 #include "conditional.h"
 
+
 enum sel_inos {
 	SEL_ROOT_INO = 2,
 	SEL_LOAD,	/* load policy */
@@ -2062,6 +2063,8 @@ static int __init init_sel_fs(void)
 		err = PTR_ERR(selinux_null.dentry);
 		selinux_null.dentry = NULL;
 	}
+
+
 
 	return err;
 }

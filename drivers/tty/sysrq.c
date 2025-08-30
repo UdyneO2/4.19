@@ -53,6 +53,10 @@
 
 #include <asm/ptrace.h>
 #include <asm/irq_regs.h>
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#include <wt_sys/wt_boot_reason.h>
+//#endif
 
 /* Whether we react on sysrq keys or just ignore them */
 static int __read_mostly sysrq_enabled = CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE;
@@ -143,6 +147,12 @@ static void sysrq_handle_crash(int key)
 	 */
 	rcu_read_unlock();
 	panic_on_oops = 1;	/* force panic */
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#ifdef CONFIG_WT_BOOT_REASON
+	save_panic_key_log("Sysrq: Trigger a crash\n");
+#endif
+//#endif
 	wmb();
 	*killer = 1;
 }
@@ -165,6 +175,22 @@ static struct sysrq_key_op sysrq_reboot_op = {
 	.action_msg	= "Resetting",
 	.enable_mask	= SYSRQ_ENABLE_BOOT,
 };
+
+#ifdef VENDOR_EDIT
+/* yanwu@TECH.Storage.FS.oF2FS, 2019-09-16, add for urgent flush */
+extern int panic_flush_device_cache(int timeout);
+static void sysrq_handle_flush(int key)
+{
+	panic_flush_device_cache(0);
+}
+
+static struct sysrq_key_op sysrq_flush_op = {
+	.handler	= sysrq_handle_flush,
+	.help_msg	= "flush(y)",
+	.action_msg	= "Emergency Flush",
+	.enable_mask	= SYSRQ_ENABLE_SYNC,
+};
+#endif
 
 static void sysrq_handle_sync(int key)
 {
@@ -489,7 +515,12 @@ static struct sysrq_key_op *sysrq_key_table[36] = {
 	/* x: May be registered on sparc64 for global PMU dump */
 	NULL,				/* x */
 	/* y: May be registered on sparc64 for global register dump */
+#ifdef VENDOR_EDIT
+/* yanwu@TECH.Storage.FS.oF2FS, 2019-09-16, add for urgent flush */
+	&sysrq_flush_op,                 /* y */
+#else
 	NULL,				/* y */
+#endif
 	&sysrq_ftrace_dump_op,		/* z */
 };
 

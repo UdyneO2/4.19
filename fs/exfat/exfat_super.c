@@ -379,7 +379,7 @@ static int exfat_d_hashi(const struct dentry *dentry, const struct inode *inode,
 }
 
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0)
 static int exfat_cmpi(const struct dentry *dentry,
 		unsigned int len, const char *str, const struct qstr *name)
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(3,11,0)
@@ -393,7 +393,7 @@ static int exfat_cmpi(const struct dentry *parent, const struct inode *pinode,
 		unsigned int len, const char *str, const struct qstr *name)
 #endif
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0)
 	struct nls_table *t = EXFAT_SB(dentry->d_sb)->nls_io;
 #else
 	struct nls_table *t = EXFAT_SB(parent->d_sb)->nls_io;
@@ -425,7 +425,7 @@ static int exfat_cmpi(const struct dentry *parent, const struct inode *pinode,
 	return 1;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0)
 static int exfat_cmp(const struct dentry *dentry,
 		unsigned int len, const char *str, const struct qstr *name)
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(3,11,0)
@@ -1097,7 +1097,7 @@ out:
 
 static int exfat_rename(struct inode *old_dir, struct dentry *old_dentry,
 						struct inode *new_dir, struct dentry *new_dentry,
-						unsigned int flags)
+                        unsigned int flags)
 {
 	struct inode *old_inode, *new_inode;
 	struct super_block *sb = old_dir->i_sb;
@@ -1109,8 +1109,8 @@ static int exfat_rename(struct inode *old_dir, struct dentry *old_dentry,
 
 	DPRINTK("exfat_rename entered\n");
 
-    if (flags & ~RENAME_NOREPLACE) {
-		err = -EINVAL;
+    if (flags & ~RENAME_NOREPLACE){
+        err = -EINVAL;
 		goto out;
     }
 

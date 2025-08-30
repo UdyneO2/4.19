@@ -33,9 +33,12 @@
 #include <linux/of.h>
 #include <asm/current.h>
 #include <linux/timer.h>
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#include <wt_sys/wt_boot_reason.h>
+//#endif
 
 #include "peripheral-loader.h"
-#include <linux/proc_fs.h>
 
 #define DISABLE_SSR 0x9889deed
 /* If set to 0x9889deed, call to subsystem_restart_dev() returns immediately */
@@ -195,7 +198,6 @@ struct subsys_device {
 	int id;
 	int restart_level;
 	int crash_count;
-	char crash_reason[256];
 	struct subsys_soc_restart_order *restart_order;
 	bool do_ramdump_on_put;
 	struct cdev char_dev;
@@ -254,13 +256,6 @@ static ssize_t crash_count_show(struct device *dev,
 	return snprintf(buf, PAGE_SIZE, "%d\n", to_subsys(dev)->crash_count);
 }
 static DEVICE_ATTR_RO(crash_count);
-
-static ssize_t crash_reason_show(struct device *dev,
-				 struct device_attribute *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%s\n", to_subsys(dev)->crash_reason);
-}
-static DEVICE_ATTR_RO(crash_reason);
 
 static ssize_t
 restart_level_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -353,6 +348,26 @@ static ssize_t system_debug_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(system_debug);
 
+#ifdef VENDOR_EDIT
+/*Jianfeng.Qiu@PSW.MM.AudioDriver.ADSP.2434874, 2019/11/26, Add for workaround fix adsp stuck issue*/
+static bool oppo_adsp_ssr = false;
+
+void oppo_set_ssr_state(bool ssr_state)
+{
+	oppo_adsp_ssr = ssr_state;
+	pr_err("%s():oppo_adsp_ssr = %d\n", __func__, oppo_adsp_ssr);
+
+}
+EXPORT_SYMBOL(oppo_set_ssr_state);
+
+bool oppo_get_ssr_state(void)
+{
+	pr_err("%s():oppo_adsp_ssr = %d\n", __func__, oppo_adsp_ssr);
+	return oppo_adsp_ssr;
+}
+EXPORT_SYMBOL(oppo_get_ssr_state);
+#endif /* VENDOR_EDIT */
+
 int subsys_get_restart_level(struct subsys_device *dev)
 {
 	return dev->restart_level;
@@ -388,44 +403,10 @@ void subsys_default_online(struct subsys_device *dev)
 }
 EXPORT_SYMBOL(subsys_default_online);
 
-static void subsys_send_uevent_notify(struct subsys_desc *desc,	int crash_count)
-{
-	char *envp[4];
-	struct subsys_device *dev;
-
-	if (!desc)
-		return;
-
-	dev = find_subsys_device(desc->name);
-		if (!dev)
-			return;
-
-	envp[0] = kasprintf(GFP_KERNEL, "SUBSYSTEM=%s", desc->name);
-	envp[1] = kasprintf(GFP_KERNEL, "CRASHCOUNT=%d", crash_count);
-	envp[2] = kasprintf(GFP_KERNEL, "CRASHREASON=%s", dev->crash_reason);
-	envp[3] = NULL;
-	kobject_uevent_env(&desc->dev->kobj, KOBJ_CHANGE, envp);
-	pr_err("%s %s %s\n", envp[0], envp[1], envp[2]);
-	kfree(envp[2]);
-	kfree(envp[1]);
-	kfree(envp[0]);
-}
-
-void subsys_store_crash_reason(struct subsys_device *dev, char *reason)
-{
-	if (dev == NULL)
-		return;
-
-	if (reason != NULL)
-		strlcpy(dev->crash_reason, reason, sizeof(dev->crash_reason));
-}
-EXPORT_SYMBOL(subsys_store_crash_reason);
-
 static struct attribute *subsys_attrs[] = {
 	&dev_attr_name.attr,
 	&dev_attr_state.attr,
 	&dev_attr_crash_count.attr,
-	&dev_attr_crash_reason.attr,
 	&dev_attr_restart_level.attr,
 	&dev_attr_firmware_name.attr,
 	&dev_attr_system_debug.attr,
@@ -791,7 +772,6 @@ static int subsystem_shutdown(struct subsys_device *dev, void *data)
 	subsys_set_state(dev, SUBSYS_OFFLINE);
 	disable_all_irqs(dev);
 
-	subsys_send_uevent_notify(dev->desc, dev->crash_count);
 	return 0;
 }
 
@@ -875,106 +855,25 @@ struct subsys_device *find_subsys_device(const char *str)
 }
 EXPORT_SYMBOL(find_subsys_device);
 
-static int val;
-static int restart_level;/*system original val*/
-struct delayed_work op_restart_modem_work;
-
-static ssize_t proc_restart_level_all_read(struct file *p_file,
-	char __user *puser_buf, size_t count, loff_t *p_offset)
-{
-	ssize_t len = 0;
-
-	len = copy_to_user(puser_buf, val?"1":"0", 1);
-	pr_info("the restart level switch is:%d\n", val);
-	return len;
-}
-
-static ssize_t proc_restart_level_all_write(struct file *p_file,
-	const char __user *puser_buf,
-	size_t count, loff_t *p_offset)
-{
-	char subsysname[][15] = {
-		"ipa_fws",
-		"modem",
-		"adsp",
-		"cdsp",
-		"venus",
-		"npu",
-		"a620_zap"
-	};
-	int i = 0;
-	char temp[2] = {0};
-	struct subsys_device *subsys;
-	int rc;
-
-	if (copy_from_user(temp, puser_buf, 1))
-		return -EFAULT;
-
-	rc = kstrtoint(temp, 0, &val);
-	if (rc != 0)
-		return -EINVAL;
-
-	cancel_delayed_work_sync(&op_restart_modem_work);
-
-	for (i = 0; i < ARRAY_SIZE(subsysname); i++) {
-		subsys = find_subsys_device(subsysname[i]);
-		if (subsys) {
-			if (val == 1)
-				subsys->restart_level = RESET_SOC;
-			else
-				subsys->restart_level = RESET_SUBSYS_COUPLED;
-		}
-	}
-	pr_info("write the restart level switch to :%d\n", val);
-	return count;
-}
-
-static const struct file_operations restart_level_all_operations = {
-	.read = proc_restart_level_all_read,
-	.write = proc_restart_level_all_write,
-};
-
-static void init_restart_level_all_node(void)
-{
-	if (!proc_create("restart_level_all", 0644, NULL,
-			&restart_level_all_operations)){
-		pr_err("%s : Failed to register proc interface\n", __func__);
-	}
-}
-
-static void op_restart_modem_work_fun(struct work_struct *work)
-{
-	struct subsys_device *subsys = find_subsys_device("modem");
-
-	if (!subsys)
-		return;
-	subsys->restart_level = restart_level;
-	pr_err("%s:level=%d\n", __func__, subsys->restart_level);
-}
-
-int op_restart_modem_init(void)
-{
-	INIT_DELAYED_WORK(&op_restart_modem_work, op_restart_modem_work_fun);
-	return 0;
-}
-
+#ifdef VENDOR_EDIT
+/* Fuchun.Liao@BSP.CHG.Basic 2018/11/27 modify for rf cable detect */
 int op_restart_modem(void)
 {
 	struct subsys_device *subsys = find_subsys_device("modem");
+	int restart_level;
 
 	if (!subsys)
 		return -ENODEV;
-	pr_err("%s:level=%d\n", __func__, subsys->restart_level);
+	pr_err("%s\n", __func__);
 	restart_level = subsys->restart_level;
 	subsys->restart_level = RESET_SUBSYS_COUPLED;
 	if (subsystem_restart("modem") == -ENODEV)
-		pr_err("%s: SSR call failed\n", __func__);
-
-	schedule_delayed_work(&op_restart_modem_work,
-			msecs_to_jiffies(10*1000));
+		pr_err("%s: SSR call modem failed\n", __func__);
+	subsys->restart_level = restart_level;
 	return 0;
 }
 EXPORT_SYMBOL(op_restart_modem);
+#endif /* VENDOR_EDIT */
 
 static int subsys_start(struct subsys_device *subsys)
 {
@@ -1367,6 +1266,47 @@ int subsystem_restart_dev(struct subsys_device *dev)
 	}
 
 	name = dev->desc->name;
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#ifdef CONFIG_WT_BOOT_REASON
+	if (dev->restart_level == RESET_SOC) {
+		if (!strcmp(name,"wcnss"))
+			set_reset_magic(RESET_MAGIC_WCNSS);
+		else if (!strcmp(name,"modem"))
+			set_reset_magic(RESET_MAGIC_MODEM);
+		else if (!strcmp(name,"adsp"))
+			set_reset_magic(RESET_MAGIC_ADSP);
+		else if (!strcmp(name,"venus"))
+			set_reset_magic(RESET_MAGIC_VENUS);
+		else if (!strcmp(name,"cdsp"))
+			set_reset_magic(RESET_MAGIC_CDSP);
+		else if (!strcmp(name,"a610_zap"))
+			set_reset_magic(RESET_MAGIC_AXXX_ZAP);
+		else if (!strcmp(name,"ipa_fws"))
+			set_reset_magic(RESET_MAGIC_IPA_FWS);
+		else if (!strcmp(name,"spss"))
+			set_reset_magic(RESET_MAGIC_SPSS);
+		else if (!strcmp(name,"slpi"))
+			set_reset_magic(RESET_MAGIC_SLPI);
+		else
+			set_reset_magic(RESET_MAGIC_SUBSYSTEM);
+		save_panic_key_log("%s subsystem failure reason: %s.\n", name, subsys_restart_reason);
+	}
+#endif
+//#endif
+
+
+	#ifdef VENDOR_EDIT
+	/*Jianfeng.Qiu@PSW.MM.AudioDriver.ADSP.2434874, 2019/11/26, Add for workaround fix adsp stuck issue*/
+	if (name && !strcmp(name, "adsp")) {
+		if (oppo_get_ssr_state()) {
+			pr_err("%s: adsp restarting, Ignoring request\n", __func__);
+			return 0;
+		} else {
+			oppo_set_ssr_state(true);
+		}
+	}
+	#endif /* VENDOR_EDIT */
 
 	send_early_notifications(dev->early_notify);
 
@@ -1966,6 +1906,14 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 	subsys->dev.bus = &subsys_bus_type;
 	subsys->dev.release = subsys_device_release;
 	subsys->notif_state = -1;
+
+#ifdef VENDOR_EDIT
+	/*Bin.Xu@BSP.Kernel.Stability,2020/5/7,
+	 * Add for init subsyst restart level as RESET_SUBSYS_COUPLED at mp build
+	 */
+	subsys->restart_level = RESET_SUBSYS_COUPLED;
+#endif
+
 	subsys->desc->sysmon_pid = -1;
 	subsys->desc->state = NULL;
 	strlcpy(subsys->desc->fw_name, desc->name,
@@ -2048,7 +1996,6 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 			goto err_setup_irqs;
 	}
 
-	op_restart_modem_init();
 	return subsys;
 err_setup_irqs:
 	if (subsys->desc->edge)
@@ -2141,7 +2088,6 @@ static int __init subsys_restart_init(void)
 	if (ret)
 		goto err_soc;
 
-	init_restart_level_all_node();
 	return 0;
 
 err_soc:

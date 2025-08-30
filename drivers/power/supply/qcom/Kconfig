@@ -77,8 +77,8 @@ config QPNP_QG
 	  to determine the battery state-of-charge (SOC) and supports other
 	  battery management features.
 
-config ONEPLUS_QPNP_QG
-	bool "ONEPLUS QPNP Qgauge driver"
+config OPPO_QPNP_QG
+	bool "OPPO QPNP Qgauge driver"
 	depends on MFD_SPMI_PMIC
 	help
 	  Say Y here to enable the Qualcomm Technologies, Inc. QGauge driver
@@ -109,5 +109,13 @@ config SMB1398_CHARGER
 	  (2) DIV2 and 3-level buck combo mode to regulate the output power from
 	      wireless charger receiver and provide the input for downstream
 	      chargers.
+
+# #ifdef ODM_WT_EDIT
+# /* Bin2.Zhang@ODM_WT.BSP.Charger.Basic, 2020-07-27, Add for disable temp protect */
+config DISABLE_TEMP_PROTECT
+	bool "disable temp protect"
+	help
+	  Say Y here to build disable temp protect version.
+# #endif /* ODM_WT_EDIT */
 
 endmenu

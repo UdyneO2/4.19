@@ -192,5 +192,7 @@ void avc_disable(void);
 DECLARE_PER_CPU(struct avc_cache_stats, avc_cache_stats);
 #endif
 
+
+
 #endif /* _SELINUX_AVC_H_ */
 

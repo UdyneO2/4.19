@@ -14,11 +14,6 @@
 #include <linux/of_batterydata.h>
 #include <linux/power_supply.h>
 
-#ifdef T0_ERROR_BATT_SUPPORT
-bool is_t0_error_batt;
-EXPORT_SYMBOL_GPL(is_t0_error_batt);
-#endif
-
 static int of_batterydata_read_lut(const struct device_node *np,
 			int max_cols, int max_rows, int *ncols, int *nrows,
 			int *col_legend_data, int *row_legend_data,
@@ -323,9 +318,6 @@ struct device_node *of_batterydata_get_best_profile(
 	int delta = 0, best_delta = 0, best_id_kohm = 0, id_range_pct,
 		i = 0, rc = 0, limit = 0;
 	bool in_range = false;
-#ifdef T0_ERROR_BATT_SUPPORT
-	struct device_node *node_needed = NULL;
-#endif
 
 	/* read battery id range percentage for best profile */
 	rc = of_property_read_u32(batterydata_container_node,
@@ -359,12 +351,15 @@ struct device_node *of_batterydata_get_best_profile(
 			if (rc)
 				continue;
 			for (i = 0; i < batt_ids.num; i++) {
-#ifdef T0_ERROR_BATT_SUPPORT
-				if (batt_ids.kohm[i] == 60)
-					node_needed = node;
-#endif
 				delta = abs(batt_ids.kohm[i] - batt_id_kohm);
 				limit = (batt_ids.kohm[i] * id_range_pct) / 100;
+#ifdef ODM_HQ_EDIT
+/* wangxianfei@ODM.BSP.charge, 2020/6/29, Add to support 1K battery ID*/
+			if(limit < 1){
+				pr_err("delta = %d, limit = %d, set limit to 1", delta, limit);
+				limit = 1;
+			}
+#endif
 				in_range = (delta <= limit);
 				/*
 				 * Check if the delta is the lowest one
@@ -382,22 +377,29 @@ struct device_node *of_batterydata_get_best_profile(
 	}
 
 	if (best_node == NULL) {
-#ifdef T0_ERROR_BATT_SUPPORT
-		pr_err("T0 error battery support, use specific battery data\n");
-		is_t0_error_batt = true;
-		return node_needed;
-#endif
 		pr_err("No battery data found\n");
 		return best_node;
 	}
 
 	/* check that profile id is in range of the measured batt_id */
+#ifndef ODM_HQ_EDIT
+/* wangxianfei@ODM.BSP.charge, 2020/6/29, Add to support 1K battery ID*/
 	if (abs(best_id_kohm - batt_id_kohm) >
 			((best_id_kohm * id_range_pct) / 100)) {
-		pr_err("out of range: profile id %d batt id %d pct %d\n",
+		pr_err("out of range: profile id %d batt id %d pct %d \n",
 			best_id_kohm, batt_id_kohm, id_range_pct);
 		return NULL;
 	}
+#else
+	if ((100 * abs(best_id_kohm - batt_id_kohm) >
+			(best_id_kohm * id_range_pct))
+		&& abs(best_id_kohm - batt_id_kohm) > 1) {
+		pr_err("out of range: profile id %d batt id %d pct %d \n",
+			best_id_kohm, batt_id_kohm, id_range_pct);
+		return NULL;
+	}
+#endif
+
 
 	rc = of_property_read_string(best_node, "qcom,battery-type",
 							&battery_type);

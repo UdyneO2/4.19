@@ -25,14 +25,17 @@
 
 /* Vibrator-LDO voltage settings */
 #define QPNP_VIB_LDO_VMIN_UV		1504000
-#define QPNP_VIB_LDO_VMAX_UV		3000000
+#define QPNP_VIB_LDO_VMAX_UV		3544000
 #define QPNP_VIB_LDO_VOLT_STEP_UV	8000
 
 /*
  * Define vibration periods: default(5sec), min(50ms), max(15sec) and
  * overdrive(30ms).
  */
-#define QPNP_VIB_MIN_PLAY_MS		50
+#ifdef VENDOR_EDIT
+/*Murphy@BSP.Kernel.Driver, 2019/04/12, Modify for viber min*/
+#define QPNP_VIB_MIN_PLAY_MS		35
+#endif
 #define QPNP_VIB_PLAY_MS		5000
 #define QPNP_VIB_MAX_PLAY_MS		15000
 #define QPNP_VIB_OVERDRIVE_PLAY_MS	30
@@ -198,7 +201,12 @@ static enum hrtimer_restart vib_stop_timer(struct hrtimer *timer)
 					     stop_timer);
 
 	chip->state = 0;
+	#ifdef VENDOR_EDIT
+	//Murphy@BSP.Kernel.Driver, 2019/04/12, fix sometimes the vibrator shake long time issue
+	queue_work(system_unbound_wq, &chip->vib_work);
+	#else
 	schedule_work(&chip->vib_work);
+	#endif
 	return HRTIMER_NORESTART;
 }
 
@@ -323,12 +331,27 @@ static ssize_t qpnp_vib_store_activate(struct device *dev,
 	if (val != 0 && val != 1)
 		return count;
 
+	#ifdef VENDOR_EDIT
+	/*Xuhang.Li@PSW.BSP.VIBRATOR,2020/3/31,Modify for not vibrating problem in scan of Wechat*/
+	if ((hrtimer_active(&chip->stop_timer))&&
+		(chip->vib_play_ms == QPNP_VIB_MIN_PLAY_MS))
+		return count;
+	#endif
+
 	mutex_lock(&chip->lock);
 	hrtimer_cancel(&chip->stop_timer);
 	chip->state = val;
-	pr_debug("state = %d, time = %llums\n", chip->state, chip->vib_play_ms);
+	#ifdef VENDOR_EDIT
+	/*Murphy@BSP.Kernel.Driver, 2019/04/12, Modify for viber log*/
+	pr_info("state = %d, time = %llums\n", chip->state, chip->vib_play_ms);
+	#endif
 	mutex_unlock(&chip->lock);
+	#ifdef VENDOR_EDIT
+	//Murphy@BSP.Kernel.Driver, 2019/04/12, fix sometimes the vibrator shake long time issue
+	queue_work(system_unbound_wq, &chip->vib_work);
+	#else
 	schedule_work(&chip->vib_work);
+	#endif
 
 	return count;
 }
@@ -349,34 +372,22 @@ static ssize_t qpnp_vib_store_vmax(struct device *dev,
 	struct led_classdev *cdev = dev_get_drvdata(dev);
 	struct vib_ldo_chip *chip = container_of(cdev, struct vib_ldo_chip,
 						cdev);
-	u32 val;
-	int ret;
+	int data, ret;
 
-	ret = kstrtouint(buf, 10, &val);
+	ret = kstrtoint(buf, 10, &data);
 	if (ret < 0)
 		return ret;
 
-	if (val <= 0)
-		return count;
-
-	val = val * 1000; /* Convert to microvolts */
+	data = data * 1000; /* Convert to microvolts */
 
 	/* check against vibrator ldo min/max voltage limits */
-	if (val < QPNP_VIB_LDO_VMIN_UV)
-		val = QPNP_VIB_LDO_VMIN_UV;
+	data = min(data, QPNP_VIB_LDO_VMAX_UV);
+	data = max(data, QPNP_VIB_LDO_VMIN_UV);
 
-	if (val > QPNP_VIB_LDO_VMAX_UV)
-		val = QPNP_VIB_LDO_VMAX_UV;
-
-	// set default vol 3000000 for N1 project.
-	val = QPNP_VIB_LDO_VMAX_UV;
-
-	pr_err("store vibr voltage:%duV\n", val);
 	mutex_lock(&chip->lock);
-	chip->vmax_uV = val;
+	chip->vmax_uV = data;
 	mutex_unlock(&chip->lock);
-
-	return count;
+	return ret;
 }
 
 static struct device_attribute qpnp_vib_attrs[] = {

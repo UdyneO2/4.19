@@ -71,9 +71,7 @@
 #include "internal.h"
 
 #include <trace/events/sched.h>
-#ifdef CONFIG_IM
-#include <linux/oem/im.h>
-#endif
+
 
 int suid_dumpable = 0;
 
@@ -1243,9 +1241,6 @@ void __set_task_comm(struct task_struct *tsk, const char *buf, bool exec)
 	task_lock(tsk);
 	trace_task_rename(tsk, buf);
 	strlcpy(tsk->comm, buf, sizeof(tsk->comm));
-#ifdef CONFIG_IM
-	im_wmi(tsk);
-#endif
 	task_unlock(tsk);
 	perf_event_comm(tsk, exec);
 }
@@ -1706,11 +1701,9 @@ static int exec_binprm(struct linux_binprm *bprm)
 		proc_exec_connector(current);
 	}
 
-	if (strcmp(current->comm, "surfaceflinger") == 0)
-		current->compensate_need = 2;
-
 	return ret;
 }
+
 
 /*
  * sys_execve() executes a new program.

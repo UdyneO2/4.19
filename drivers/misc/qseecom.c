@@ -9634,6 +9634,11 @@ static int qseecom_suspend(struct platform_device *pdev, pm_message_t state)
 	mutex_lock(&qsee_bw_mutex);
 	mutex_lock(&clk_access_lock);
 
+	//#ifdef VENDOR_EDIT
+	//feedback for rtc2824901
+	INIT_WORK(&qseecom.bw_inactive_req_ws, qseecom_bw_inactive_req_work);
+	//#endif
+
 	if (qseecom.current_mode != INACTIVE) {
 		ret = msm_bus_scale_client_update_request(
 			qseecom.qsee_perf_client, INACTIVE);
@@ -9657,7 +9662,9 @@ static int qseecom_suspend(struct platform_device *pdev, pm_message_t state)
 
 	mutex_unlock(&clk_access_lock);
 	mutex_unlock(&qsee_bw_mutex);
-	cancel_work_sync(&qseecom.bw_inactive_req_ws);
+// Yayong.Duan@ODM_WT.SYS.Stability, 2020/09/14, No need to cancel_work_sync if the work was not initialized.
+	if (qseecom.support_bus_scaling && !qseecom.no_clock_support)
+		cancel_work_sync(&qseecom.bw_inactive_req_ws);
 
 	return 0;
 }

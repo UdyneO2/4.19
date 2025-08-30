@@ -4,7 +4,9 @@
 
 #include <linux/types.h>
 
-extern int qrtr_first_msg;
+/* jiangyanjun@SYS.POWER, 2020/09/17, add QCOM power debug patch */
+extern int qrtr_first_msg_wt;
+
 struct sk_buff;
 
 /* endpoint node id auto assignment */

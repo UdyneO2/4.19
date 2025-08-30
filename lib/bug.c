@@ -47,6 +47,10 @@
 #include <linux/bug.h>
 #include <linux/sched.h>
 #include <linux/rculist.h>
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#include <wt_sys/wt_boot_reason.h>
+//#endif
 
 extern struct bug_entry __start___bug_table[], __stop___bug_table[];
 
@@ -137,6 +141,7 @@ struct bug_entry *find_bug(unsigned long bugaddr)
 		if (bugaddr == bug_addr(bug))
 			return bug;
 
+
 	return module_find_bug(bugaddr);
 }
 
@@ -190,11 +195,24 @@ enum bug_trap_type report_bug(unsigned long bugaddr, struct pt_regs *regs)
 
 	printk(KERN_DEFAULT CUT_HERE);
 
-	if (file)
+	if (file) {
 		pr_crit("kernel BUG at %s:%u!\n", file, line);
-	else
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#ifdef CONFIG_WT_BOOT_REASON
+		save_panic_key_log("kernel BUG at %s:%u!\n", file, line);
+#endif
+//#endif
+	} else {
 		pr_crit("Kernel BUG at %pB [verbose debug info unavailable]\n",
 			(void *)bugaddr);
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#ifdef CONFIG_WT_BOOT_REASON
+		save_panic_key_log("Kernel BUG at %p \n", (void *)bugaddr);
+#endif
+//#endif
+	}
 
 	return BUG_TRAP_TYPE_BUG;
 }

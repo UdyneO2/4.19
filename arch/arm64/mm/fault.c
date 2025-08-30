@@ -47,6 +47,10 @@
 #include <soc/qcom/scm.h>
 
 #include <acpi/ghes.h>
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#include <wt_sys/wt_boot_reason.h>
+//#endif
 
 struct fault_info {
 	int	(*fn)(unsigned long addr, unsigned int esr,
@@ -263,6 +267,12 @@ static void die_kernel_fault(const char *msg, unsigned long addr,
 
 	pr_alert("Unable to handle kernel %s at virtual address %016lx\n", msg,
 		 addr);
+//#ifdef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/09/03, Add for display boot reason
+#ifdef CONFIG_WT_BOOT_REASON
+	save_panic_key_log("Unable to handle kernel %s at virtual address %08lx\n", msg, addr);
+#endif
+//#endif
 
 	mem_abort_decode(esr);
 
@@ -514,10 +524,6 @@ retry:
 		 * the mmap_sem because it would already be released
 		 * in __lock_page_or_retry in mm/filemap.c.
 		 */
-#ifdef CONFIG_MEMPLUS
-		count_vm_event(RETRYPAGE);
-#endif
-
 		if (fatal_signal_pending(current)) {
 			if (!user_mode(regs))
 				goto no_context;

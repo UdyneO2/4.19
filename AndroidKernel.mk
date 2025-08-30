@@ -142,6 +142,19 @@ mdpath=`find $(KERNEL_MODULES_OUT) -type f -name modules.dep`;\
 if [ "$$mdpath" != "" ];then\
 mpath=`dirname $$mdpath`; rm -rf $$mpath;\
 fi
+#ifdef VENDOR_EIDT
+#Xiao.Li@PSW.CN.WiFi.Network.1471780, 2018/06/26,
+#Add for limit speed function
+imq=`find $(KERNEL_MODULES_OUT)/ -type f -name imq.ko`;\
+if [ "$$imq" != "" ];then\
+mkdir -p $(PRODUCT_OUT)/system/lib/modules/;\
+cp -Rf  $(KERNEL_MODULES_OUT)/imq.ko $(PRODUCT_OUT)/system/lib/modules/ ;\
+fi
+xtIMQ=`find $(KERNEL_MODULES_OUT)/ -type f -name xt_IMQ.ko`;\
+if [ "$$xtIMQ" != "" ];then\
+cp -Rf  $(KERNEL_MODULES_OUT)/xt_IMQ.ko $(PRODUCT_OUT)/system/lib/modules/ ;\
+fi
+#endif
 endef
 
 ifneq ($(KERNEL_LEGACY_DIR),true)

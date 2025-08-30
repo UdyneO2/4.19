@@ -18,9 +18,6 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
-#include <linux/atomic.h>
-#include <linux/syscalls.h>
-#include <linux/oem/power/oem_external_fg.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/spmi.h>
@@ -29,15 +26,21 @@
 #include <linux/regulator/machine.h>
 #include <linux/regulator/of_regulator.h>
 
-#include <linux/oem/oem_force_dump.h>
-#include <linux/oem/param_rw.h>
-#include <linux/oem/boot_mode.h>
-#include <linux/power_supply.h>
-
+#ifdef VENDOR_EDIT //YiXue.Ge@PSW.BSP.Kernel.Stablity, 2018-10-26 add for enable pmic wd
+#include <linux/kthread.h>
+#include <linux/rtc.h>
+#include <linux/proc_fs.h>
+#include <linux/mutex.h>
+#include <uapi/linux/sched/types.h>
+#include <linux/suspend.h>
 #include <linux/sched/debug.h>
-#include <linux/msm_drm_notify.h>
+#endif
 
-#include <soc/qcom/msm-poweroff.h>
+//#ifdef ODM_HQ_EDIT
+/*Kui.Feng@ODM_HQ.SYSTEM 2020/06/23 coco After DVT1/cocoB After T0,change the volume key */
+#include <linux/string.h>
+#include <soc/oppo/oppo_project.h>
+//#endif
 
 #define PMIC_VER_8941				0x01
 #define PMIC_VERSION_REG			0x0105
@@ -90,8 +93,15 @@
 #define QPNP_PON_KPDPWR_RESIN_S2_CNTL2(pon)	((pon)->base + 0x4B)
 #define QPNP_PON_PS_HOLD_RST_CTL(pon)		((pon)->base + 0x5A)
 #define QPNP_PON_PS_HOLD_RST_CTL2(pon)		((pon)->base + 0x5B)
+#ifdef VENDOR_EDIT //YiXue.Ge@PSW.BSP.Kernel.Stablity, 2018-10-26 add for enable pmic wd
+#define QPNP_PON_WD_RST_S1_TIMER(pon)		((pon)->base + 0x54)
+#define QPNP_PON_WD_RST_S2_TIMER(pon)		((pon)->base + 0x55)
+#endif
 #define QPNP_PON_WD_RST_S2_CTL(pon)		((pon)->base + 0x56)
 #define QPNP_PON_WD_RST_S2_CTL2(pon)		((pon)->base + 0x57)
+#ifdef VENDOR_EDIT //YiXue.Ge@PSW.BSP.Kernel.Stablity, 2018-10-26 add for enable pmic wd
+#define QPNP_PON_WD_RESET_PET(pon)  ((pon)->base + 0x58)
+#endif
 #define QPNP_PON_SW_RST_S2_CTL(pon)		((pon)->base + 0x62)
 #define QPNP_PON_SW_RST_S2_CTL2(pon)		((pon)->base + 0x63)
 #define QPNP_PON_SW_RST_GO(pon)			((pon)->base + 0x64)
@@ -120,6 +130,11 @@
 #define QPNP_PON_S1_TIMER_MASK			(0xF)
 #define QPNP_PON_S2_TIMER_MASK			(0x7)
 #define QPNP_PON_S2_CNTL_TYPE_MASK		(0xF)
+#ifdef VENDOR_EDIT //YiXue.Ge@PSW.BSP.Kernel.Stablity, 2018-10-26 add for enable pmic wd
+#define QPNP_PON_WD_S2_TIMER_MASK		(0x7F)
+#define QPNP_PON_WD_S1_TIMER_MASK		(0x7F)
+#define QPNP_PON_WD_RESET_PET_MASK		BIT(0)
+#endif
 
 #define QPNP_PON_DBC_DELAY_MASK(pon)	PON_OFFSET((pon)->subtype, 0x7, 0xF)
 
@@ -211,13 +226,13 @@ struct qpnp_pon {
 	struct pon_regulator	*pon_reg_cfg;
 	struct list_head	list;
 	struct delayed_work	bark_work;
-	struct delayed_work	press_work;
-#ifdef CONFIG_KEY_FLUSH
-	struct delayed_work     press_work_flush;
-#endif
-	struct work_struct  up_work;
-	atomic_t	   press_count;
 	struct dentry		*debugfs;
+#ifdef VENDOR_EDIT //YiXue.Ge@PSW.BSP.Kernel.Stablity, 2018-10-26 add for enable pmic wd
+	struct task_struct *wd_task;
+	struct mutex		wd_task_mutex;
+	unsigned int		pmicwd_state;//|reserver|rst type|timeout|enable|
+	u8			suspend_state;//record the suspend state
+#endif
 	u16			base;
 	u8			subtype;
 	u8			pon_ver;
@@ -250,8 +265,6 @@ static int pon_ship_mode_en;
 module_param_named(
 	ship_mode_en, pon_ship_mode_en, int, 0600
 );
-static int qpnp_pon_read_gen2_pon_off_reason(
-	struct qpnp_pon *pon, u16 *reason, int *reason_index_offset);
 
 static struct qpnp_pon *sys_reset_dev;
 static struct qpnp_pon *modem_reset_dev;
@@ -815,6 +828,268 @@ int qpnp_pon_wd_config(bool enable)
 }
 EXPORT_SYMBOL(qpnp_pon_wd_config);
 
+#ifdef VENDOR_EDIT
+//YiXue.Ge@PSW.BSP.Kernel.Stablity, 2018-10-26 add for enable pmic wd
+#define OPPO_PMIC_WD_DEFAULT_TIMEOUT 254
+#define OPPO_PMIC_WD_DEFAULT_ENABLE 0
+
+int qpnp_pon_wd_timer(unsigned char timer, enum pon_power_off_type reset_type)
+{
+	struct qpnp_pon *pon = sys_reset_dev;
+	int rc = 0;
+	u8 s1_timer,s2_timer;
+
+	if (!pon)
+		return -EPROBE_DEFER;
+
+	if(timer > 127)
+	{
+		s2_timer = 127;
+		if(timer - 127 > 127)
+			s1_timer = 127;
+		else
+			s1_timer = timer - 127;
+	}else{
+		s2_timer = timer&0xff;
+		s1_timer = 0;
+	}
+	rc = qpnp_pon_masked_write(pon, QPNP_PON_WD_RST_S2_TIMER(pon),
+			QPNP_PON_WD_S2_TIMER_MASK, s2_timer);
+	if (rc)
+		dev_err(pon->dev,
+				"Unable to write to addr=%x, rc(%d)\n",
+				QPNP_PON_WD_RST_S2_TIMER(pon), rc);
+
+	rc = qpnp_pon_masked_write(pon, QPNP_PON_WD_RST_S1_TIMER(pon),
+			QPNP_PON_WD_S1_TIMER_MASK, s1_timer);
+	if (rc)
+		dev_err(pon->dev,
+				"Unable to write to addr=%x, rc(%d)\n",
+				QPNP_PON_WD_RST_S1_TIMER(pon), rc);
+
+	rc = qpnp_pon_masked_write(pon, QPNP_PON_WD_RST_S2_CTL(pon),
+			QPNP_PON_S2_CNTL_TYPE_MASK, reset_type);
+	if (rc)
+		dev_err(pon->dev,
+				"Unable to write to addr=%x, rc(%d)\n",
+				QPNP_PON_WD_RST_S2_CTL(pon), rc);
+
+	return rc;
+}
+EXPORT_SYMBOL(qpnp_pon_wd_timer);
+
+int qpnp_pon_wd_pet(void)
+{
+	struct qpnp_pon *pon = sys_reset_dev;
+	int rc = 0;
+
+	if (!pon)
+		return -EPROBE_DEFER;
+
+	rc = qpnp_pon_masked_write(pon, QPNP_PON_WD_RESET_PET(pon),
+			QPNP_PON_WD_RESET_PET_MASK, 1);
+	if (rc)
+		dev_err(pon->dev,
+				"Unable to write to addr=%x, rc(%d)\n",
+				QPNP_PON_WD_RESET_PET(pon), rc);
+
+	return rc;
+}
+EXPORT_SYMBOL(qpnp_pon_wd_pet);
+
+static int pmicwd_kthread(void *arg)
+{
+	struct qpnp_pon *pon = (struct qpnp_pon *)arg;
+	struct sched_param param = {.sched_priority = MAX_RT_PRIO-1};
+	sched_setscheduler(current, SCHED_FIFO, &param);
+
+	while (!kthread_should_stop()) {
+		schedule_timeout_interruptible(msecs_to_jiffies((((pon->pmicwd_state >> 8)&0xff)*1000)/2));
+		printk("pmicwd_kthread PET wd suspend state %d\n", pon->suspend_state);
+		qpnp_pon_wd_pet();
+
+		/* yanghao@PSW.Kernel.Stability for detect the suspend resume block issue
+		 * add at least 128 seconds ~ 256 seconds during resume suspend
+		 */
+		if((pon->suspend_state & 0x0F) >= 1) {
+			show_state_filter(TASK_UNINTERRUPTIBLE);
+			panic("oppo suspend resume state %d\n", pon->suspend_state);
+                } else if(pon->suspend_state & 0xF0)
+			pon->suspend_state ++;
+
+	}
+	qpnp_pon_wd_config(0);
+	return 0;
+}
+
+static ssize_t pmicwd_proc_read(struct file *file, char __user *buf,
+		size_t count,loff_t *off)
+{
+	struct qpnp_pon *pon = sys_reset_dev;
+	unsigned int val;
+	char page[128] = {0};
+	int len = 0;
+
+	if(!pon){
+		return -EFAULT;
+	}
+	mutex_lock(&pon->wd_task_mutex);
+	regmap_read(pon->regmap, QPNP_PON_WD_RST_S2_CTL2(pon), &val);
+	printk("pmicwd_proc_read:%x wd=%x\n",pon->pmicwd_state,val);
+	//|reserver|rst type|timeout|enable|
+	len = snprintf(&page[len],128 - len,"enable = %d timeout = %d rstype = %d\n",
+		pon->pmicwd_state & 0xff,(pon->pmicwd_state >> 8) & 0xff,(pon->pmicwd_state >> 16) & 0xff);
+	mutex_unlock(&pon->wd_task_mutex);
+
+	if(len > *off)
+	   len -= *off;
+	else
+	   len = 0;
+
+	if(copy_to_user(buf,page,(len < count ? len : count))){
+	   return -EFAULT;
+	}
+	*off += len < count ? len : count;
+	return (len < count ? len : count);
+
+}
+
+static ssize_t pmicwd_proc_write(struct file *file, const char __user *buf,
+		size_t count,loff_t *off)
+{
+	struct qpnp_pon *pon = sys_reset_dev;
+	int tmp_rstypt = 0;
+	int tmp_timeout = 0;
+	int tmp_enable = 0;
+	int ret = 0;
+    char buffer[64] = {0};
+	unsigned int new_state;
+
+	if(!pon){
+		return -EFAULT;
+	}
+
+    if (count > 64) {
+       count = 64;
+    }
+
+    if (copy_from_user(buffer, buf, count)) {
+		printk("%s: read proc input error.\n", __func__);
+		return count;
+    }
+	ret = sscanf(buffer, "%d %d %d", &tmp_enable, &tmp_timeout, &tmp_rstypt);
+	if(ret <= 0){
+		printk("%s: input error\n", __func__);
+		return count;
+	}
+	if(tmp_timeout < 60 || tmp_timeout > 255){
+		tmp_timeout = OPPO_PMIC_WD_DEFAULT_TIMEOUT;
+	}
+	if(tmp_rstypt >= PON_POWER_OFF_MAX_TYPE || tmp_rstypt <= PON_POWER_OFF_RESERVED){
+		if (get_eng_version() == AGING) {
+			tmp_rstypt = PON_POWER_OFF_WARM_RESET;
+		} else {
+			tmp_rstypt = PON_POWER_OFF_HARD_RESET;
+		}
+	}
+	new_state = (tmp_enable & 0xff)|((tmp_timeout & 0xff) << 8)|((tmp_rstypt & 0xff)<< 16);
+	printk("pmicwd_proc_write:old:%x new:%x\n",pon->pmicwd_state,new_state);
+
+	if(new_state == pon->pmicwd_state)
+		return count;
+
+	mutex_lock(&pon->wd_task_mutex);
+	if(pon->wd_task){
+		qpnp_pon_wd_config(0);
+		pon->pmicwd_state &= ~0xff;
+		kthread_stop(pon->wd_task);
+		pon->wd_task = NULL;
+	}
+	qpnp_pon_wd_timer(tmp_timeout,tmp_rstypt);
+	pon->pmicwd_state = new_state;
+	if(tmp_enable){
+		pon->wd_task = kthread_create(pmicwd_kthread, pon,"pmicwd");
+		if(pon->wd_task){
+			qpnp_pon_wd_config(1);
+			wake_up_process(pon->wd_task);
+		}else{
+			qpnp_pon_wd_config(0);
+			pon->pmicwd_state &= ~0xff;
+		}
+	}
+	qpnp_pon_wd_pet();
+	mutex_unlock(&pon->wd_task_mutex);
+	return count;
+}
+
+void oppo_set_pmicWd_state(int enable)
+{
+	struct qpnp_pon *pon = sys_reset_dev;
+	unsigned int new_state;
+
+	new_state = (pon->pmicwd_state & ~0x1) | (enable & 0x1);
+
+	printk("oppo_set_pmicWd_state:old:%x new:%x\n", pon->pmicwd_state,new_state);
+	if(new_state == pon->pmicwd_state)
+		return ;
+
+	mutex_lock(&pon->wd_task_mutex);
+	if(pon->wd_task){
+		qpnp_pon_wd_config(0);
+		pon->pmicwd_state &= ~0xff;
+		kthread_stop(pon->wd_task);
+		pon->wd_task = NULL;
+	}
+	pon->pmicwd_state = new_state;
+	if(enable){
+		pon->wd_task = kthread_create(pmicwd_kthread, pon,"pmicwd");
+		if(pon->wd_task){
+			qpnp_pon_wd_config(1);
+			wake_up_process(pon->wd_task);
+		}else{
+			qpnp_pon_wd_config(0);
+			pon->pmicwd_state &= ~0xff;
+		}
+	}
+	qpnp_pon_wd_pet();
+	mutex_unlock(&pon->wd_task_mutex);
+}
+EXPORT_SYMBOL(oppo_set_pmicWd_state);
+
+/*
+ * This function is register as callback function to get notifications
+ * from the PM module on the system suspend state.
+ */
+static int pmicWd_pm_notifier(struct notifier_block *nb,
+				  unsigned long event, void *unused)
+{
+	struct qpnp_pon *pon = sys_reset_dev;
+	switch (event) {
+	case PM_SUSPEND_PREPARE:
+		pon->suspend_state = 0x80 ;
+		pr_info("pmicwd start suspend\n");
+		break;
+
+	case PM_POST_SUSPEND:
+		pon->suspend_state = 0;
+		pr_info("pmicwd finish resume\n");
+		break;
+	}
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block pmicWd_pm_nb = {
+	.notifier_call = pmicWd_pm_notifier,
+	.priority = INT_MAX,
+};
+
+static struct file_operations pmicwd_proc_fops = {
+	.read = pmicwd_proc_read,
+	.write = pmicwd_proc_write,
+};
+#endif
+
 static int qpnp_pon_get_trigger_config(enum pon_trigger_source pon_src,
 							bool *enabled)
 {
@@ -962,21 +1237,6 @@ static int qpnp_pon_input_dispatch(struct qpnp_pon *pon, u32 pon_type)
 	switch (cfg->pon_type) {
 	case PON_KPDPWR:
 		pon_rt_bit = QPNP_PON_KPDPWR_N_SET;
-		if ((pon_rt_sts & pon_rt_bit) == 0) {
-			pr_info("Power-Key UP\n");
-			schedule_work(&pon->up_work);
-			cancel_delayed_work(&pon->press_work);
-#ifdef CONFIG_KEY_FLUSH
-			cancel_delayed_work(&pon->press_work_flush);
-			panic_flush_device_cache_circled_off();
-#endif
-		} else {
-			pr_info("Power-Key DOWN\n");
-			schedule_delayed_work(&pon->press_work, msecs_to_jiffies(4000));
-#ifdef CONFIG_KEY_FLUSH
-			schedule_delayed_work(&pon->press_work_flush, msecs_to_jiffies(7000));
-#endif
-		}
 		break;
 	case PON_RESIN:
 		pon_rt_bit = QPNP_PON_RESIN_N_SET;
@@ -991,8 +1251,14 @@ static int qpnp_pon_input_dispatch(struct qpnp_pon *pon, u32 pon_type)
 		return -EINVAL;
 	}
 
+#ifndef ODM_WT_EDIT
+// Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2020/08/18, Add for print key code log.
 	pr_debug("PMIC input: code=%d, status=0x%02X\n", cfg->key_code,
 		pon_rt_sts);
+#else
+	pr_err("PMIC input: code=%d, status=0x%02X\n", cfg->key_code,
+		pon_rt_sts);
+#endif
 	key_status = pon_rt_sts & pon_rt_bit;
 
 	if (pon->kpdpwr_dbc_enable && cfg->pon_type == PON_KPDPWR) {
@@ -1009,12 +1275,14 @@ static int qpnp_pon_input_dispatch(struct qpnp_pon *pon, u32 pon_type)
 		input_sync(pon->pon_input);
 	}
 
+#ifdef VENDOR_EDIT
+//Fanhong.Kong@ProDrv.CHG,add 2016/7/26 for keycode
+	pr_err("keycode = %d,key_st = %d\n",cfg->key_code, key_status);
+#endif
 	input_report_key(pon->pon_input, cfg->key_code, key_status);
 	input_sync(pon->pon_input);
 
 	cfg->old_state = !!key_status;
-
-	oem_check_force_dump_key(cfg->key_code, key_status);
 
 	return 0;
 }
@@ -1164,123 +1432,6 @@ static void bark_work_func(struct work_struct *work)
 	}
 }
 
-int check_powerkey_count(int press)
-{
-	int ret = 0;
-	int param_poweroff_count = 0;
-
-	ret = get_param_by_index_and_offset(13, 0x30, &param_poweroff_count,
-	      sizeof(param_poweroff_count));
-
-	if (press)
-		param_poweroff_count++;
-	else
-		param_poweroff_count--;
-
-	ret = set_param_by_index_and_offset(13, 0x30, &param_poweroff_count,
-	      sizeof(param_poweroff_count));
-	pr_info("param_poweroff_count=%d\n", param_poweroff_count);
-	return 0;
-}
-
-int qpnp_powerkey_state_check(struct qpnp_pon *pon, int up)
-{
-	int rc = 0;
-
-	if (get_boot_mode() !=  MSM_BOOT_MODE_NORMAL)
-		return 0;
-
-	if (up) {
-		rc = atomic_read(&pon->press_count);
-		if (rc < 1) {
-			atomic_inc(&pon->press_count);
-			check_powerkey_count(1);
-		}
-	} else {
-		rc = atomic_read(&pon->press_count);
-		if (rc > 0) {
-			atomic_dec(&pon->press_count);
-			check_powerkey_count(0);
-		}
-	}
-	return 0;
-}
-
-static void up_work_func(struct work_struct *work)
-{
-	struct qpnp_pon *pon =
-		container_of(work, struct qpnp_pon, up_work);
-
-	qpnp_powerkey_state_check(pon, 0);
-}
-
-static void press_work_func(struct work_struct *work)
-{
-	int display_bl, boot_mode;
-	int rc;
-	uint pon_rt_sts = 0;
-	struct qpnp_pon_config *cfg;
-	struct qpnp_pon *pon =
-	container_of(work, struct qpnp_pon, press_work.work);
-
-	cfg = qpnp_get_cfg(pon, PON_KPDPWR);
-	if (!cfg) {
-		dev_err(pon->dev, "Invalid config pointer\n");
-		goto err_return;
-	}
-	/* check the RT status to get the current status of the line */
-	rc = regmap_read(pon->regmap, QPNP_PON_RT_STS(pon), &pon_rt_sts);
-	if (rc) {
-		dev_err(pon->dev, "Unable to read PON RT status\n");
-		goto err_return;
-	}
-	if ((pon_rt_sts & QPNP_PON_KPDPWR_N_SET) == 1) {
-		qpnp_powerkey_state_check(pon, 1);
-		dev_err(pon->dev, "after 4s Power-Key is still DOWN\n");
-		display_bl = dsi_panel_backlight_get();
-		boot_mode = get_boot_mode();
-		if (display_bl == 0 && boot_mode == MSM_BOOT_MODE_NORMAL) {
-			oem_force_minidump_mode();
-			show_state_filter(TASK_UNINTERRUPTIBLE);
-			panic("power key still pressed\n");
-		}
-	}
-	msleep(20);
-	ksys_sync();
-err_return:
-	return;
-}
-
-#ifdef CONFIG_KEY_FLUSH
-static void press_work_flush_func(struct work_struct *work)
-{
-	int rc;
-	uint pon_rt_sts = 0;
-	struct qpnp_pon_config *cfg;
-	struct qpnp_pon *pon =
-		container_of(work, struct qpnp_pon, press_work_flush.work);
-
-	cfg = qpnp_get_cfg(pon, PON_KPDPWR);
-	if (!cfg) {
-		dev_err(pon->dev, "Invalid config pointer\n");
-		goto err_return;
-	}
-	/* check the RT status to get the current status of the line */
-	rc = regmap_read(pon->regmap, QPNP_PON_RT_STS(pon), &pon_rt_sts);
-	if (rc) {
-		dev_err(pon->dev, "Unable to read PON RT status\n");
-		goto err_return;
-	}
-	if ((pon_rt_sts & QPNP_PON_KPDPWR_N_SET) == 1) {
-		qpnp_powerkey_state_check(pon, 1);
-		panic_flush_device_cache_circled_on();
-		dev_err(pon->dev, "after 7s Pwr-Key is still DOWN, circle flush\n");
-	}
-err_return:
-	return;
-}
-#endif
-
 static irqreturn_t qpnp_resin_bark_irq(int irq, void *_pon)
 {
 	struct qpnp_pon *pon = _pon;
@@ -1311,85 +1462,6 @@ static irqreturn_t qpnp_resin_bark_irq(int irq, void *_pon)
 
 	return IRQ_HANDLED;
 }
-static int qpnp_config_reset(struct qpnp_pon *pon, struct qpnp_pon_config *cfg);
-
-static unsigned int pwr_dump_enabled = -1;
-static unsigned int long_pwr_dump_enabled = -1;
-
-static  int param_set_pwr_dump_enabled(const char *val, const struct kernel_param *kp)
-{
-	unsigned long enable;
-	struct qpnp_pon *pon = sys_reset_dev;
-	struct qpnp_pon_config *cfg = NULL;
-	int rc;
-
-	if (!val || kstrtoul(val, 0, &enable) || enable > 1)
-		return -EINVAL;
-
-	cfg = qpnp_get_cfg(pon, 0); /*0 means pwr key */
-	if (!cfg)
-		return -EINVAL;
-	pr_info("pwr_dump_enabled = %d and request enable = %d\n",
-			pwr_dump_enabled, (unsigned int)enable);
-	if (pwr_dump_enabled != enable) {
-		cfg->s1_timer = 1352; /*reduce this time */
-		cfg->s2_timer = 2000;
-		cfg->s2_type = 1;/*change s2 type to warm reset*/
-		rc = qpnp_config_reset(pon, cfg);
-
-		/*if we need enable this feature, */
-		/*we should disable wakeup capability */
-		if (enable)
-			disable_irq_wake(cfg->state_irq);
-		else
-			enable_irq_wake(cfg->state_irq);
-		pwr_dump_enabled = enable;
-	}
-	return 0;
-}
-
-static  int param_set_long_press_pwr_dump_enabled
-(const char *val, const struct kernel_param *kp)
-{
-	unsigned long enable;
-	struct qpnp_pon *pon = sys_reset_dev;
-	struct qpnp_pon_config *cfg = NULL;
-	int rc;
-
-	if (!val || kstrtoul(val, 0, &enable) || enable > 1)
-		return -EINVAL;
-
-	cfg = qpnp_get_cfg(pon, PON_KPDPWR); /*0 means pwr key*/
-	if (!cfg)
-		return -EINVAL;
-
-	pr_info("long_pwr_dump_enabled = %d enable = %d s1_timer =%d\n",
-			long_pwr_dump_enabled,
-			(unsigned int)enable, cfg->s1_timer);
-
-	if (long_pwr_dump_enabled != enable) {
-
-		if (enable) {
-			cfg->s1_timer = 10256; /*reduce this time */
-			cfg->s2_timer = 2000;
-			cfg->s2_type = PON_POWER_OFF_TYPE_WARM_RESET; /*change s2 type warm reset*/
-			rc = qpnp_config_reset(pon, cfg);
-
-		} else {
-			/* Disable S2 reset */
-			rc = qpnp_pon_masked_write(pon, cfg->s2_cntl2_addr, QPNP_PON_S2_CNTL_EN, 0);
-		}
-		long_pwr_dump_enabled = enable;
-	}
-	return 0;
-}
-
-module_param_call(pwr_dump_enabled,
-param_set_pwr_dump_enabled, param_get_uint, &pwr_dump_enabled, 0644);
-
-module_param_call(long_pwr_dump_enabled,
-param_set_long_press_pwr_dump_enabled,
-param_get_uint, &long_pwr_dump_enabled, 0644);
 
 static int qpnp_config_pull(struct qpnp_pon *pon, struct qpnp_pon_config *cfg)
 {
@@ -1811,7 +1883,10 @@ static int qpnp_pon_config_init(struct qpnp_pon *pon,
 	int rc = 0, i = 0, pmic_wd_bark_irq;
 	struct device_node *cfg_node = NULL;
 	struct qpnp_pon_config *cfg;
-
+	//#ifdef ODM_HQ_EDIT
+	/*Kui.Feng@ODM_HQ.SYSTEM 2020/06/23 coco After DVT1/cocoB After T0,change the volume key */
+	char *pcb_version = NULL;
+	//#endif
 	if (pon->num_pon_config) {
 		pon->pon_cfg = devm_kcalloc(pon->dev, pon->num_pon_config,
 					    sizeof(*pon->pon_cfg), GFP_KERNEL);
@@ -1873,6 +1948,76 @@ static int qpnp_pon_config_init(struct qpnp_pon *pon,
 		 * specified if there is no key mapping on the reset line.
 		 */
 		of_property_read_u32(cfg_node, "linux,code", &cfg->key_code);
+
+        //#ifdef ODM_HQ_EDIT
+        /*Kui.Feng@ODM_HQ.SYSTEM 2020/06/23 coco After DVT1/cocoB After T0,change the volume key */
+        switch(get_project()) {
+        case 20673:
+        case 20674:
+        case 20675:
+        case 20677:
+        case 0x2067A:
+        case 0x2067D:
+		    if (of_property_read_bool(cfg_node, "change-volume-key")) {
+			    if (cfg->key_code == KEY_VOLUMEDOWN) {
+				    pcb_version = (char *)get_PCB_Version();
+				    if (pcb_version != NULL) {
+					    /* HQ only have evb and t0 */
+					    if(!strcmp(pcb_version, "EVB") || !strcmp(pcb_version, "T0") || !strcmp(pcb_version, "T1")
+						    || !strcmp(pcb_version, "EVT1") || !strcmp(pcb_version, "EVT2")) {
+						    // do nothing
+					    } else {
+						    cfg->key_code = KEY_VOLUMEUP;
+					    }
+				    }
+			    }
+		    }
+			break;
+        case 20670:
+        case 20671:
+        case 20672:
+        case 20676:
+        case 20679:
+        case 0x2067C:
+		    if (of_property_read_bool(cfg_node, "change-volume-key")) {
+			    if (cfg->key_code == KEY_VOLUMEDOWN) {
+				    pcb_version = (char *)get_PCB_Version();
+				    if (pcb_version != NULL) {
+					    /* HQ only have evb and t0 */
+					    if(!strcmp(pcb_version, "EVB1") || !strcmp(pcb_version, "T0") || !strcmp(pcb_version, "T1")) {
+						    // do nothing
+					    } else {
+						    cfg->key_code = KEY_VOLUMEUP;
+					    }
+				    }
+			    }
+		    }
+			break;
+        case 0x206BD:
+        case 0x206BF:
+        case 0x206C0:
+        case 0x206BE:
+        case 0x206C1:
+        case 0x206C2:
+        case 0x206C3:
+		    if (of_property_read_bool(cfg_node, "change-volume-key")) {
+			    if (cfg->key_code == KEY_VOLUMEDOWN) {
+				    pcb_version = (char *)get_PCB_Version();
+				    if (pcb_version != NULL) {
+					    /* WT only have t0 */
+					    if(!strcmp(pcb_version, "T0")) {
+						    // do nothing
+					    } else {
+						    cfg->key_code = KEY_VOLUMEUP;
+					    }
+				    }
+			    }
+		    }
+			break;
+        default:
+			break;
+	    }
+		//#endif
 
 		/* Register key configuration */
 		if (cfg->key_code) {
@@ -2148,184 +2293,6 @@ static struct kernel_param_ops dload_on_uvlo_ops = {
 
 module_param_cb(dload_on_uvlo, &dload_on_uvlo_ops, &dload_on_uvlo, 0600);
 
-#define PMIC_SID_NUM 3
-#define QPNP_PON_POFF_BUFFER_SIZE 128
-
-static bool created_pwr_on_off_obj;
-static bool g_is_cold_boot[PMIC_SID_NUM];
-static struct qpnp_pon *g_pon[PMIC_SID_NUM];
-static struct kobject *pwr_on_off_kobj;
-
-static ssize_t pwron_reason_show(struct kobject *kobj,
-	struct kobj_attribute *attr, char *buf)
-{
-	int i;
-	int index;
-	u32 pon_sts = 0;
-	int rc;
-	char *pbuf = buf;
-
-	int ret = 0;
-
-	snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE, "qpnp_pon_reason :\n");
-	ret += strlen(pbuf);
-	pbuf += strlen(pbuf);
-
-	for (i = 0 ; i < ARRAY_SIZE(qpnp_pon_reason) ; i++) {
-		snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE,
-			"[%d] : %s\n", i, qpnp_pon_reason[i]);
-		ret += strlen(pbuf);
-		pbuf += strlen(pbuf);
-	}
-
-	for (i = 0 ; i < PMIC_SID_NUM ; i++) {
-		/* PON reason */
-		if (g_pon[i] == NULL || g_pon[i]->regmap == NULL)
-			continue;
-		/* PON reason */
-		rc = regmap_read(g_pon[i]->regmap,	QPNP_PON_REASON1(g_pon[i]), &pon_sts);
-		if (rc) {
-			snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE,
-				"PMIC@SID%d Unable to read PON_RESASON1 reg and rc: %d\n",
-				to_spmi_device(g_pon[i]->dev->parent)->usid, rc);
-			ret += strlen(pbuf);
-			pbuf += strlen(pbuf);
-			continue;
-		}
-
-		index = ffs(pon_sts) - 1;
-		cold_boot = !qpnp_pon_is_warm_reset();
-		if (index >= ARRAY_SIZE(qpnp_pon_reason) || index < 0) {
-			snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE,
-				"PMIC@SID%d PON_REASON1 regs :[0x%x] and Power-on reason: Unknown and '%s' boot\n",
-				to_spmi_device(g_pon[i]->dev->parent)->usid,
-				pon_sts,
-				cold_boot ? "cold" : "warm");
-			ret += strlen(pbuf);
-			pbuf += strlen(pbuf);
-			continue;
-		} else {
-			g_pon[i]->pon_trigger_reason = index;
-			snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE,
-				"PMIC@SID%d PON_REASON1 regs :[0x%x] and Power-on reason: '%s' boot and ",
-				to_spmi_device(g_pon[i]->dev->parent)->usid,
-				pon_sts,
-				cold_boot ? "cold" : "warm");
-			ret += strlen(pbuf);
-			pbuf += strlen(pbuf);
-		}
-
-		for_each_set_bit(index, (unsigned long *)&pon_sts,	ARRAY_SIZE(qpnp_pon_reason)) {
-			snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE, "[%d] ", index);
-			ret += strlen(pbuf);
-			pbuf += strlen(pbuf);
-		}
-
-		snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE, "\n");
-		ret += strlen(pbuf);
-		pbuf += strlen(pbuf);
-	}
-
-	if (ret)
-		*(buf+ret-1) = '\n';
-
-	return ret;
-}
-
-static ssize_t pwroff_reason_show(struct kobject *kobj,
-	struct kobj_attribute *attr, char *buf)
-{
-	int i;
-	int j;
-	int index;
-	int rc;
-	u8 temp_buf[2];
-	u16 poff_sts = 0;
-	char *pbuf = buf;
-
-	int ret = 0;
-	int reason_index_offset = 0;
-
-	snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE, "qpnp_poff_reason :\n");
-	ret += strlen(pbuf);
-	pbuf += strlen(pbuf);
-
-	for (j = 0; j < ARRAY_SIZE(qpnp_poff_reason); j++) {
-		snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE,
-			"[%d] : %s\n", j, qpnp_poff_reason[j]);
-		ret += strlen(pbuf);
-		pbuf += strlen(pbuf);
-	}
-
-	for (i = 0; i < PMIC_SID_NUM; i++) {
-		/* POFF reason */
-		if (g_pon[i] == NULL || g_pon[i]->regmap == NULL)
-			continue;
-		/* POFF reason */
-		if (!is_pon_gen1(g_pon[i]) && g_pon[i]->subtype != PON_1REG) {
-			rc = qpnp_pon_read_gen2_pon_off_reason(g_pon[i], &poff_sts, &reason_index_offset);
-			if (rc)
-				return rc;
-		} else {
-			rc = regmap_bulk_read(g_pon[i]->regmap, QPNP_POFF_REASON1(g_pon[i]), temp_buf, 2);
-			if (rc) {
-				dev_err(g_pon[i]->dev, "Unable to read POFF_REASON regs rc:%d\n", rc);
-				return rc;
-			}
-
-			poff_sts = temp_buf[0] | (temp_buf[1] << 8);
-		}
-
-		index = ffs(poff_sts) - 1 + reason_index_offset;
-		if (index >= ARRAY_SIZE(qpnp_poff_reason) || index < 0) {
-			snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE,
-				"PMIC@SID%d POFF_REASON regs :[0x%x] and Power-off reason: Unknown\n",
-				to_spmi_device(g_pon[i]->dev->parent)->usid,
-				poff_sts);
-			ret += strlen(pbuf);
-			pbuf += strlen(pbuf);
-			continue;
-		} else {
-			snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE,
-				"PMIC@SID%d POFF_REASON regs :[0x%x] and Power-off reason: ",
-				to_spmi_device(g_pon[i]->dev->parent)->usid,
-				poff_sts);
-			ret += strlen(pbuf);
-			pbuf += strlen(pbuf);
-		}
-
-		if (index < ARRAY_SIZE(qpnp_poff_reason) && index >= 0) {
-			snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE,
-				"[%d] ", index);
-			ret += strlen(pbuf);
-			pbuf += strlen(pbuf);
-		}
-		snprintf(pbuf, QPNP_PON_POFF_BUFFER_SIZE, "\n");
-		ret += strlen(pbuf);
-		pbuf += strlen(pbuf);
-	}
-
-	if (ret)
-		*(buf+ret-1) = '\n';
-
-	return ret;
-}
-
-static struct kobj_attribute pwron_reason_attribute =
-	__ATTR(pwron_reason, 0444, pwron_reason_show, NULL);
-static struct kobj_attribute pwroff_reason_attribute =
-	__ATTR(pwroff_reason, 0444, pwroff_reason_show, NULL);
-
-static struct attribute *pwr_on_off_attrs[] = {
-	&pwron_reason_attribute.attr,
-	&pwroff_reason_attribute.attr,
-	NULL,
-};
-
-static struct attribute_group pwr_on_off_attrs_group = {
-	.attrs = pwr_on_off_attrs,
-};
-
 #if defined(CONFIG_DEBUG_FS)
 
 static int qpnp_pon_debugfs_uvlo_get(void *data, u64 *val)
@@ -2481,6 +2448,13 @@ static int qpnp_pon_configure_s3_reset(struct qpnp_pon *pon)
 	return 0;
 }
 
+#ifdef VENDOR_EDIT
+/* fanhui@PhoneSW.BSP, 2016/05/16, interface to read PMIC reg PON_REASON and POFF_REASON */
+extern char pon_reason[];
+extern char poff_reason[];
+int preason_initialized;
+#endif /*VENDOR_EDIT*/
+
 static int qpnp_pon_read_hardware_info(struct qpnp_pon *pon, bool sys_reset)
 {
 	struct device *dev = pon->dev;
@@ -2533,22 +2507,36 @@ static int qpnp_pon_read_hardware_info(struct qpnp_pon *pon, bool sys_reset)
 		boot_reason = ffs(pon_sts);
 
 	index = ffs(pon_sts) - 1;
+#ifdef VENDOR_EDIT
+/* fanhui@PhoneSW.BSP, 2016/05/18, when KPDPWR_N is set it is PWK start*/
+	if (pon_sts & 0x80)
+		index = 7;
+#endif /*VENDOR_EDIT*/
 	cold_boot = sys_reset_dev ? !_qpnp_pon_is_warm_reset(sys_reset_dev)
 				  : !_qpnp_pon_is_warm_reset(pon);
-	for_each_set_bit(index, (unsigned long *)&pon_sts, ARRAY_SIZE(qpnp_pon_reason)) {
-		if (index >= ARRAY_SIZE(qpnp_pon_reason) || index < 0) {
-			dev_info(dev, "PMIC@SID%d PON_REASON1 regs: [0x%x] and Power-on reason: Unknown and '%s' boot\n",
-				to_spmi_device(dev->parent)->usid,
-				pon_sts,
-				cold_boot ? "cold" : "warm");
-		} else {
-			pon->pon_trigger_reason = index;
-			dev_info(dev, "PMIC@SID%d PON_REASON1 regs: [0x%x] and Power-on reason: %s and '%s' boot\n",
-				to_spmi_device(dev->parent)->usid,
-				pon_sts,
-				qpnp_pon_reason[index],
-				cold_boot ? "cold" : "warm");
-		}
+	if (index >= ARRAY_SIZE(qpnp_pon_reason) || index < 0) {
+		dev_info(dev, "PMIC@SID%d Power-on reason: Unknown and '%s' boot\n",
+			 to_spmi_device(dev->parent)->usid,
+			 cold_boot ? "cold" : "warm");
+#ifdef VENDOR_EDIT
+/* fanhui@PhoneSW.BSP, 2016/05/16, interface to read PMIC reg PON_REASON and POFF_REASON */
+		if (!preason_initialized)
+			snprintf(pon_reason, 128, "Unknown[0x%02X] and '%s' boot\n", pon_sts, cold_boot ? "cold" : "warm");
+#endif /*VENDOR_EDIT*/
+	} else {
+		pon->pon_trigger_reason = index;
+		dev_info(dev, "PMIC@SID%d Power-on reason: %s and '%s' boot\n",
+			 to_spmi_device(dev->parent)->usid,
+			 qpnp_pon_reason[index],
+			 cold_boot ? "cold" : "warm");
+
+#ifdef VENDOR_EDIT
+/* fanhui@PhoneSW.BSP, 2016/05/16, interface to read PMIC reg PON_REASON and POFF_REASON */
+		if (!preason_initialized)
+			snprintf(pon_reason, 128, "[0x%02X]%s and '%s' boot\n", pon_sts,
+				qpnp_pon_reason[index],	cold_boot ? "cold" : "warm");
+#endif /*VENDOR_EDIT*/
+
 	}
 
 	/* POFF reason */
@@ -2563,6 +2551,13 @@ static int qpnp_pon_read_hardware_info(struct qpnp_pon *pon, bool sys_reset)
 		if (rc) {
 			dev_err(dev, "Register read failed, addr=0x%04X, rc=%d\n",
 				QPNP_POFF_REASON1(pon), rc);
+#ifdef VENDOR_EDIT
+/* fanhui@PhoneSW.BSP, 2016/05/16, interface to read PMIC reg PON_REASON and POFF_REASON */
+			if (!preason_initialized) {
+				snprintf(poff_reason, 128, "Unable to read POFF_RESASON regs rc:%d\n", rc);
+				preason_initialized = 1;
+			}
+#endif /*VENDOR_EDIT*/
 			return rc;
 		}
 		poff_sts = buf[0] | (u16)(buf[1] << 8);
@@ -2570,21 +2565,27 @@ static int qpnp_pon_read_hardware_info(struct qpnp_pon *pon, bool sys_reset)
 	index = ffs(poff_sts) - 1 + reason_index_offset;
 	if (index >= ARRAY_SIZE(qpnp_poff_reason) || index < 0 ||
 					index < reason_index_offset) {
-		dev_info(dev, "PMIC@SID%d: POFF_REASON regs: [0x%x] and Unknown power-off reason\n",
-			 to_spmi_device(dev->parent)->usid,
-			 poff_sts);
+		dev_info(dev, "PMIC@SID%d: Unknown power-off reason\n",
+			 to_spmi_device(dev->parent)->usid);
+#ifdef VENDOR_EDIT
+/* fanhui@PhoneSW.BSP, 2016/05/16, interface to read PMIC reg PON_REASON and POFF_REASON */
+		if (!preason_initialized) {
+			snprintf(poff_reason, 128, "Unknown[0x%04X]\n", poff_sts);
+			preason_initialized = 1;
+		}
+#endif /*VENDOR_EDIT*/
 	} else {
 		pon->pon_power_off_reason = index;
-		dev_info(dev, "PMIC@SID%d: POFF_REASON regs: [0x%x] and Power-off reason: %s\n",
+		dev_info(dev, "PMIC@SID%d: Power-off reason: %s\n",
 			 to_spmi_device(dev->parent)->usid,
-			 poff_sts,
 			 qpnp_poff_reason[index]);
-	}
-
-	if (/*to_spmi_device(dev->parent)->usid >= 0 &&*/ //An unsigned value can never be negative, so this test will always evaluate the same way.
-		to_spmi_device(dev->parent)->usid < PMIC_SID_NUM) {
-		g_pon[to_spmi_device(dev->parent)->usid] = pon;
-		g_is_cold_boot[to_spmi_device(dev->parent)->usid] = cold_boot;
+#ifdef VENDOR_EDIT
+/* fanhui@PhoneSW.BSP, 2016/05/16, interface to read PMIC reg PON_REASON and POFF_REASON */
+		if (!preason_initialized) {
+			snprintf(poff_reason, 128, "[0x%04X]%s\n", poff_sts, qpnp_poff_reason[index]);
+			preason_initialized = 1;
+		}
+#endif /*VENDOR_EDIT*/
 	}
 
 	if ((pon->pon_trigger_reason == PON_SMPL ||
@@ -2681,7 +2682,10 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	u32 base, delay;
 	bool sys_reset, modem_reset;
 	int rc;
-	int i, reg;
+#ifdef VENDOR_EDIT
+/*xing.xiong@BSP.Kernel.Driver, 2019/07/31, Add for get pwr status when power on*/
+	u32 pon_rt_sts = 0;
+#endif
 
 	pon = devm_kzalloc(dev, sizeof(*pon), GFP_KERNEL);
 	if (!pon)
@@ -2731,17 +2735,6 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 		to_spmi_device(dev->parent)->usid, pon->num_pon_config,
 		pon->num_pon_reg);
 
-	for (i = 0; i < 16; i++) {
-		rc = regmap_read(pon->regmap, ((pon)->base + 0xC0 + i), &reg);
-		dev_info(&pdev->dev, "(0x%x:0x%x)\n",
-			((pon)->base + 0xC0 + i), reg);
-		if (rc) {
-			dev_err(&pdev->dev, "Unable to read addr=0x%x, rc(%d)\n",
-				((pon)->base + 0xC0 + i), rc);
-			return rc;
-		}
-	}
-
 	rc = qpnp_pon_read_hardware_info(pon, sys_reset);
 	if (rc)
 		return rc;
@@ -2757,11 +2750,6 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	dev_set_drvdata(dev, pon);
 
 	INIT_DELAYED_WORK(&pon->bark_work, bark_work_func);
-	INIT_DELAYED_WORK(&pon->press_work, press_work_func);
-#ifdef CONFIG_KEY_FLUSH
-	INIT_DELAYED_WORK(&pon->press_work_flush, press_work_flush_func);
-#endif
-	INIT_WORK(&pon->up_work, up_work_func);
 
 	rc = qpnp_pon_parse_dt_power_off_config(pon);
 	if (rc)
@@ -2818,18 +2806,46 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	if (modem_reset)
 		modem_reset_dev = pon;
 
-	if (!created_pwr_on_off_obj) {
-		pwr_on_off_kobj = kobject_create_and_add("pwr_on_off_reason", NULL);
-
-		if (!pwr_on_off_kobj) {
-			dev_err(&pdev->dev, "kobject_create_and_add for pwr_on_off_reason failed.\n");
-		} else if (sysfs_create_group(pwr_on_off_kobj, &pwr_on_off_attrs_group)) {
-			dev_err(&pdev->dev, "sysfs_create_group for pwr_on_off_reason failed.\n");
-			kobject_put(pwr_on_off_kobj);
+#ifdef VENDOR_EDIT //YiXue.Ge@PSW.BSP.Kernel.Stablity, 2018-10-26 add for enable pmic wd
+	pon->pmicwd_state = of_property_read_bool(pdev->dev.of_node,"oppo,pmicwd");
+	pon->wd_task = NULL;
+	pon->suspend_state = 0;
+	if(sys_reset && pon->pmicwd_state){
+		if (get_eng_version() == AGING) {
+			pon->pmicwd_state = OPPO_PMIC_WD_DEFAULT_ENABLE | (OPPO_PMIC_WD_DEFAULT_TIMEOUT << 8) |
+				(PON_POWER_OFF_WARM_RESET << 16);
+		} else {
+			pon->pmicwd_state = OPPO_PMIC_WD_DEFAULT_ENABLE | (OPPO_PMIC_WD_DEFAULT_TIMEOUT << 8) |
+				(PON_POWER_OFF_HARD_RESET << 16);
 		}
+		proc_create("pmicWd", S_IRWXUGO, NULL, &pmicwd_proc_fops);
+		mutex_init(&pon->wd_task_mutex);
+		#if OPPO_PMIC_WD_DEFAULT_ENABLE
+		pon->wd_task = kthread_create(pmicwd_kthread, pon,"pmicwd");
+		if(pon->wd_task){
+			if (get_eng_version() == AGING) {
+				qpnp_pon_wd_timer(OPPO_PMIC_WD_DEFAULT_TIMEOUT, PON_POWER_OFF_WARM_RESET);
+			} else {
+				qpnp_pon_wd_timer(OPPO_PMIC_WD_DEFAULT_TIMEOUT, PON_POWER_OFF_HARD_RESET);
+			}
+			qpnp_pon_wd_config(1);
+			wake_up_process(pon->wd_task);
+		}else{
+			pon->pmicwd_state &= ~0xff;
+		}
+		#endif
 
-		created_pwr_on_off_obj = true;
+		//yanghao@PSW.Kernel.Stability for detect the suspend resume block issue 2020-1-2
+		rc = register_pm_notifier(&pmicWd_pm_nb);
+		if (rc) {
+			dev_err(dev, "%s: pmicWd power state notif error %d\n", __func__, rc);
+		}
 	}
+
+	/*xing.xiong@BSP.Kernel.Driver, 2019/07/31, Add for get pwr status when power on*/
+	regmap_read(pon->regmap, QPNP_PON_RT_STS(pon), &pon_rt_sts);
+	dev_info(dev, "probe keycode = 116, key_st = 0x%x\n", pon_rt_sts);
+#endif
 
 	qpnp_pon_debugfs_init(pon);
 
@@ -2855,6 +2871,129 @@ static int qpnp_pon_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef VENDOR_EDIT
+//YiXue.Ge@PSW.BSP.Kernel.Stablity, 2018-10-26 add for enable pmic wd
+static int  setalarm(unsigned long time,bool enable)
+{
+	static struct rtc_device *rtc;
+	static struct rtc_wkalrm alm;
+	static struct rtc_wkalrm org_alm;
+	unsigned long now;
+	int rc = -1;
+	static bool store_alm_success = false;
+
+	if(!rtc){
+		rtc = rtc_class_open("rtc0");
+	}
+
+	if(!rtc){
+		printk("open rtc fail %d\n",rc);
+		return rc;
+	}
+
+	if(enable){
+		rc = rtc_read_alarm(rtc, &org_alm);
+		if (rc < 0) {
+			printk("setalarm read alarm fail %d\n",rc);
+			store_alm_success = false;
+			return rc;
+		}
+		store_alm_success = true;
+		rc = rtc_read_time(rtc, &alm.time);
+		if (rc < 0) {
+			printk("setalarm read time fail %d\n",rc);
+			return rc;
+		}
+
+		rtc_tm_to_time(&alm.time, &now);
+		memset(&alm, 0, sizeof alm);
+		rtc_time_to_tm(now + time, &alm.time);
+		alm.enabled = true;
+		rc = rtc_set_alarm(rtc, &alm);
+		if (rc < 0) {
+			printk("setalarm  set alarm fail %d\n",rc);
+			return rc;
+		}
+	} else if (store_alm_success) {
+		alm.enabled = false;
+		rc = rtc_set_alarm(rtc, &alm);
+		if (rc < 0) {
+			printk("setalarm  set alarm fail %d\n",rc);
+			return rc;
+		}
+	    /* consider setting timer and orginal timer. we store orginal timer at pon suspend,
+           and reset rtc from store at pon resume, no matter which one is greater. bottom
+           driver would judge write to RTC or not. */
+		rc = rtc_set_alarm(rtc, &org_alm);
+		if (rc < 0) {
+			printk("setalarm  set org alarm fail %d\n",rc);
+			return rc;
+		}
+	} else {
+		printk("%s store_alm_success:%d\n", __func__, store_alm_success);
+	}
+	return 0;
+}
+static int qpnp_suspend(struct device *dev)
+{
+	struct qpnp_pon *pon =
+			(struct qpnp_pon *)dev_get_drvdata(dev);
+	unsigned long time = 0;
+
+	if(sys_reset_dev == NULL || sys_reset_dev != pon){
+		return 0;
+	}
+	if(!(pon->pmicwd_state & 0xff))
+	{
+		printk("%s:qpnp_suspend disable wd\n",dev_name(dev));
+		return 0;
+	}
+	pon->suspend_state = 0;
+	time = (pon->pmicwd_state >> 8)&0xff;
+	printk("%s:qpnp_suspend wd has enable\n",dev_name(dev));
+	qpnp_pon_wd_pet();
+	setalarm(time - 30,true);
+	return 0;
+}
+
+static int qpnp_resume(struct device *dev)
+{
+	struct qpnp_pon *pon =
+			(struct qpnp_pon *)dev_get_drvdata(dev);
+
+
+	if(sys_reset_dev == NULL || sys_reset_dev != pon
+		|| !(pon->pmicwd_state & 0xff)){
+		return 0;
+	}
+	pon->suspend_state = 0x70;
+	printk("%s:qpnp_resume wd has enable\n",dev_name(dev));
+	//disable alarm
+	setalarm(0,false);
+	qpnp_pon_wd_pet();
+	return 0;
+}
+
+static int qpnp_poweroff(struct device *dev)
+{
+	struct qpnp_pon *pon =
+			(struct qpnp_pon *)dev_get_drvdata(dev);
+	printk("qpnp_poweroff is call\n");
+	if(sys_reset_dev == NULL || sys_reset_dev != pon)
+		return 0;
+	qpnp_pon_wd_pet();
+	qpnp_pon_wd_config(0);
+	return 0;
+}
+
+
+static const struct dev_pm_ops qpnp_pm_ops = {
+	.suspend = qpnp_suspend,
+	.resume = qpnp_resume,
+	.poweroff = qpnp_poweroff,
+};
+#endif /* VENDOR_EDIT */
+
 static const struct of_device_id qpnp_pon_match_table[] = {
 	{ .compatible = "qcom,qpnp-power-on" },
 	{}
@@ -2862,6 +3001,10 @@ static const struct of_device_id qpnp_pon_match_table[] = {
 
 static struct platform_driver qpnp_pon_driver = {
 	.driver = {
+#ifdef VENDOR_EDIT 
+//YiXue.Ge@PSW.BSP.Kernel.Stablity, 2018-10-26 add for enable pmic wd
+		.pm = &qpnp_pm_ops,
+#endif
 		.name = "qcom,qpnp-power-on",
 		.of_match_table = qpnp_pon_match_table,
 	},

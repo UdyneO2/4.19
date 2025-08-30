@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/err.h>
@@ -15,9 +15,6 @@
 #include "tsens.h"
 #include "thermal_core.h"
 #include "qcom/qti_virtual_sensor.h"
-#ifdef CONFIG_HOUSTON
-#include <oneplus/houston/houston_helper.h>
-#endif
 
 LIST_HEAD(tsens_device_list);
 
@@ -225,9 +222,6 @@ static int tsens_thermal_zone_register(struct tsens_device *tmdev)
 				sensor_missing++;
 				continue;
 			}
-#ifdef CONFIG_HOUSTON
-			ht_register_thermal_zone_device(tmdev->sensor[i].tzd);
-#endif
 		} else {
 			pr_debug("Sensor not enabled:%d\n", i);
 		}
@@ -279,7 +273,7 @@ static void tsens_therm_fwk_notify(struct work_struct *work)
 			}
 			TSENS_DBG(tmdev, "Calling trip_temp for sensor %d\n",
 					i);
-			of_thermal_handle_trip(tmdev->sensor[i].tzd);
+			of_thermal_handle_trip_temp(tmdev->sensor[i].tzd, temp);
 		}
 	}
 	if (tmdev->min_temp_sensor_id != MIN_TEMP_DEF_OFFSET) {
@@ -290,7 +284,7 @@ static void tsens_therm_fwk_notify(struct work_struct *work)
 			return;
 		}
 		TSENS_DBG(tmdev, "Calling trip_temp for sensor %d\n", i);
-		of_thermal_handle_trip(tmdev->min_temp.tzd);
+		of_thermal_handle_trip_temp(tmdev->min_temp.tzd, temp);
 	}
 }
 

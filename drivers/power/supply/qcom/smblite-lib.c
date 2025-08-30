@@ -191,7 +191,6 @@ static void smblite_lib_notify_device_mode(struct smb_charger *chg, bool enable)
 	extcon_set_state_sync(chg->extcon, EXTCON_USB, enable);
 }
 
-#define VBOOST_5P00V	0x03
 static void smblite_lib_notify_usb_host(struct smb_charger *chg, bool enable)
 {
 	int rc = 0;
@@ -209,13 +208,7 @@ static void smblite_lib_notify_usb_host(struct smb_charger *chg, bool enable)
 				"Couldn't enable VBUS in OTG mode rc=%d\n", rc);
 			return;
 		}
-		rc = smblite_lib_masked_write(chg, DCDC_BST_VREG_SEL,
-					VBOOST_MASK, VBOOST_5P00V);
-		if (rc < 0) {
-			smblite_lib_err(chg,
-				"Couldn't write BST_VREG_SEL rc=%d\n", rc);
-			return;
-		}
+
 		smblite_lib_notify_extcon_props(chg, EXTCON_USB_HOST);
 	} else {
 		smblite_lib_dbg(chg, PR_OTG, "disabling VBUS in OTG mode\n");
@@ -440,7 +433,6 @@ static void smblite_lib_uusb_removal(struct smb_charger *chg)
 	vote(chg->pl_enable_votable_indirect, USBIN_V_VOTER, false, 0);
 	vote(chg->usb_icl_votable, SW_ICL_MAX_VOTER, true,
 			is_flashlite_active(chg) ? USBIN_500UA : USBIN_100UA);
-	vote(chg->usb_icl_votable, FLASH_ACTIVE_VOTER, false, 0);
 
 	/* Remove SW thermal regulation votes */
 	vote(chg->usb_icl_votable, SW_THERM_REGULATION_VOTER, false, 0);
@@ -467,10 +459,8 @@ void smblite_lib_suspend_on_debug_battery(struct smb_charger *chg)
 	}
 	if (chg->suspend_input_on_debug_batt) {
 		vote(chg->usb_icl_votable, DEBUG_BOARD_VOTER, val.intval, 0);
-		if (val.intval) {
+		if (val.intval)
 			pr_info("Input suspended: Fake battery\n");
-			schgm_flashlite_config_usbin_collapse(chg, false);
-		}
 	} else {
 		vote(chg->chg_disable_votable, DEBUG_BOARD_VOTER,
 					val.intval, 0);
@@ -1616,15 +1606,8 @@ int smblite_lib_set_prop_current_max(struct smb_charger *chg,
 	}
 
 	/* Update TypeC Rp based current */
-	if (chg->connector_type == POWER_SUPPLY_CONNECTOR_TYPEC) {
+	if (chg->connector_type == POWER_SUPPLY_CONNECTOR_TYPEC)
 		update_sw_icl_max(chg, chg->real_charger_type);
-	} else if (is_flashlite_active(chg) && (val->intval >=  USBIN_400UA)) {
-		/* For Uusb based SDP port */
-		vote(chg->usb_icl_votable, FLASH_ACTIVE_VOTER, true,
-				val->intval - USBIN_300UA);
-		smblite_lib_dbg(chg, PR_MISC, "flash_active = 1, ICL set to  %d\n",
-						val->intval - USBIN_300UA);
-	}
 
 	return 0;
 }
@@ -2295,7 +2278,7 @@ static void update_sw_icl_max(struct smb_charger *chg,
 				enum power_supply_type type)
 {
 	int typec_mode;
-	int rp_ua, icl_ua;
+	int rp_ua;
 
 	if (chg->typec_mode == POWER_SUPPLY_TYPEC_SINK_AUDIO_ADAPTER) {
 		vote(chg->usb_icl_votable, SW_ICL_MAX_VOTER, true, 500000);
@@ -2346,16 +2329,6 @@ static void update_sw_icl_max(struct smb_charger *chg,
 		vote(chg->usb_icl_votable, SW_ICL_MAX_VOTER, true,
 					USBIN_100UA);
 		break;
-	}
-
-	if (is_flashlite_active(chg)) {
-		icl_ua =  get_effective_result(chg->usb_icl_votable);
-		if (icl_ua >=  USBIN_400UA) {
-			vote(chg->usb_icl_votable, FLASH_ACTIVE_VOTER, true,
-				icl_ua - USBIN_300UA);
-			smblite_lib_dbg(chg, PR_MISC, "flash_active = 1 ICL is set to %d\n",
-						icl_ua - USBIN_300UA);
-		}
 	}
 }
 
@@ -2570,7 +2543,6 @@ static void typec_src_removal(struct smb_charger *chg)
 	/* reset input current limit voters */
 	vote(chg->usb_icl_votable, SW_ICL_MAX_VOTER, true,
 			is_flashlite_active(chg) ? USBIN_500UA : USBIN_100UA);
-	vote(chg->usb_icl_votable, FLASH_ACTIVE_VOTER, false, 0);
 	vote(chg->usb_icl_votable, USB_PSY_VOTER, false, 0);
 
 	/* reset parallel voters */
@@ -3000,6 +2972,9 @@ static void smblite_lib_thermal_regulation_work(struct work_struct *work)
 
 	/* check if DIE_TEMP is below LB */
 	if (!(stat & DIE_TEMP_MASK)) {
+		icl_ua += THERM_REGULATION_STEP_UA;
+		vote(chg->usb_icl_votable, SW_THERM_REGULATION_VOTER,
+				true, icl_ua);
 
 		/*
 		 * Check if we need further increments:
@@ -3008,12 +2983,8 @@ static void smblite_lib_thermal_regulation_work(struct work_struct *work)
 		 * ICL then remove vote and exit work.
 		 */
 		if (!strcmp(get_effective_client(chg->usb_icl_votable),
-				SW_THERM_REGULATION_VOTER)) {
-			icl_ua += THERM_REGULATION_STEP_UA;
-			vote(chg->usb_icl_votable, SW_THERM_REGULATION_VOTER,
-					true, icl_ua);
+				SW_THERM_REGULATION_VOTER))
 			goto reschedule;
-		}
 	}
 
 exit:

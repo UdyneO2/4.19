@@ -28,14 +28,16 @@
 #include "qrtr.h"
 
 #define QRTR_LOG_PAGE_CNT 4
+/* jiangyanjun@SYS.POWER, 2020/09/17, add QCOM power debug patch */
 #define QRTR_INFO(ctx, x, ...)				\
-	do { \
-		ipc_log_string(ctx, x, ##__VA_ARGS__); \
-		if (qrtr_first_msg) { \
-			qrtr_first_msg = 0; \
-			pr_info(x, ##__VA_ARGS__); \
-		} \
-	} while (0)
+       do {                                            \
+               ipc_log_string(ctx, x, ##__VA_ARGS__);  \
+               if (qrtr_first_msg_wt)                     \
+               {                                       \
+                       qrtr_first_msg_wt = 0;             \
+                       pr_info(x, ##__VA_ARGS__);      \
+               }                                       \
+       }while(0)
 
 #define QRTR_PROTO_VER_1 1
 #define QRTR_PROTO_VER_2 3

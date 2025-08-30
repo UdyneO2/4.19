@@ -3456,7 +3456,7 @@ s32 write_whole_entry_set(struct super_block *sb, ENTRY_SET_CACHE_T *es)
 s32 write_partial_entries_in_entry_set (struct super_block *sb, ENTRY_SET_CACHE_T *es, DENTRY_T *ep, u32 count)
 {
 	s32 ret, byte_offset, off;
-	u32 clu = 0, sec;
+	u32 clu=0, sec;
 	FS_INFO_T *p_fs = &(EXFAT_SB(sb)->fs_info);
 	BD_INFO_T *p_bd = &(EXFAT_SB(sb)->bd_info);
 	CHAIN_T dir;
@@ -3842,10 +3842,16 @@ s32 exfat_find_dir_entry(struct super_block *sb, CHAIN_T *p_dir, UNI_NAME_T *p_u
 
 						if ((++order) == 2)
 							uniname = p_uniname->name;
-						else if (uniname == NULL)
-							return (-2);
+#ifndef VENDOR_EDIT
+/* Fuchun.Liao@BSP.CHG.Basic 2018/06/11 modify for uniname null pointer */
 						else
 							uniname += 15;
+#else
+						else if (uniname == NULL)
+							return -2;
+						else
+							uniname += 15;
+#endif /* VENDOR_EDIT */
 
 						len = extract_uni_name_from_name_entry(name_ep, entry_uniname, order);
 

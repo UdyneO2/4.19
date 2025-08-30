@@ -11,7 +11,13 @@
 #define MSM_DRM_EVENT_BLANK			0x01
 /* A hardware display blank early change occurred */
 #define MSM_DRM_EARLY_EVENT_BLANK		0x02
+#ifdef VENDOR_EDIT
+/* Gou shengjun@PSW.MM.Display.LCD.Feature,2018-10-12
+ * add for OnScreenFingerprint
+*/
+/* event for onscreenfingerprint scene */
 #define MSM_DRM_ONSCREENFINGERPRINT_EVENT	0x10
+#endif /* VENDOR_EDIT */
 
 enum {
 	/* panel: power on */
@@ -32,8 +38,6 @@ struct msm_drm_notifier {
 	enum msm_drm_display_id id;
 	void *data;
 };
-
-int dsi_panel_backlight_get(void);
 
 #ifdef CONFIG_DRM_MSM
 int msm_drm_register_client(struct notifier_block *nb);

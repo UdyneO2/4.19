@@ -51,7 +51,6 @@ static inline void set_max_mapnr(unsigned long limit) { }
 extern unsigned long totalram_pages;
 extern void * high_memory;
 extern int page_cluster;
-extern unsigned long dbg_pm[8];
 
 #ifdef CONFIG_SYSCTL
 extern int sysctl_legacy_va_layout;
@@ -2510,7 +2509,7 @@ int __must_check write_one_page(struct page *page);
 void task_dirty_inc(struct task_struct *tsk);
 
 /* readahead.c */
-#define VM_MAX_READAHEAD	512	/* kbytes */
+#define VM_MAX_READAHEAD	(totalram_pages > 0x100000 ? 512 : 128)	/* kbytes */
 #define VM_MIN_READAHEAD	16	/* kbytes (includes current page) */
 
 int force_page_cache_readahead(struct address_space *mapping, struct file *filp,
@@ -2951,15 +2950,18 @@ struct reclaim_param {
 	int nr_to_reclaim;
 	/* pages reclaimed */
 	int nr_reclaimed;
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
+	/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
+	 * flag that relcaim inactive pages only */
+	bool inactive_lru;
+	/* robin.ren@PSW.BSP.Kernel.Performance, 2019-03-13,
+	 * the target reclaimed process
+	 */
+	struct task_struct *reclaimed_task;
+#endif
 };
 extern struct reclaim_param reclaim_task_anon(struct task_struct *task,
 		int nr_to_reclaim);
-extern struct reclaim_param reclaim_task_nomap(struct task_struct *task,
-		int nr_to_reclaim);
-extern int reclaim_address_space(struct address_space *mapping,
-		struct reclaim_param *rp, struct vm_area_struct *vma);
-extern int proc_reclaim_notifier_register(struct notifier_block *nb);
-extern int proc_reclaim_notifier_unregister(struct notifier_block *nb);
 #endif
 
 #endif /* __KERNEL__ */

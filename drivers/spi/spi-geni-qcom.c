@@ -1270,7 +1270,7 @@ static void geni_spi_handle_rx(struct spi_geni_master *mas)
 	int rx_wc = 0;
 	u8 *rx_buf = NULL;
 
-	if (!mas->cur_xfer)
+	if (!mas->cur_xfer|| !mas->cur_xfer->rx_buf)
 		return;
 
 	rx_buf = mas->cur_xfer->rx_buf;
@@ -1314,6 +1314,13 @@ static irqreturn_t geni_spi_irq(int irq, void *data)
 {
 	struct spi_geni_master *mas = data;
 	u32 m_irq = 0;
+
+#ifdef ODM_HQ_EDIT
+/* liunianliang@ODM.HQ.BSP.System, for avoid null point, 20200628 */
+	if (!data) {
+		return IRQ_HANDLED;
+	}
+#endif
 
 	if (pm_runtime_status_suspended(mas->dev)) {
 		GENI_SE_DBG(mas->ipc, false, mas->dev,

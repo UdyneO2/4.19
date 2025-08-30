@@ -868,8 +868,8 @@ struct adc_channels {
 		  _pre, _scale)						\
 
 static const struct adc_channels adc_chans_pmic5[ADC_MAX_CHANNEL] = {
-	//[ADC_REF_GND]		= ADC_CHAN_VOLT("ref_gnd", 1,
-	//				SCALE_HW_CALIB_DEFAULT)
+	[ADC_REF_GND]		= ADC_CHAN_VOLT("ref_gnd", 1,
+					SCALE_HW_CALIB_DEFAULT)
 	[ADC_1P25VREF]		= ADC_CHAN_VOLT("vref_1p25", 1,
 					SCALE_HW_CALIB_DEFAULT)
 	[ADC_VPH_PWR]		= ADC_CHAN_VOLT("vph_pwr", 3,
@@ -891,20 +891,21 @@ static const struct adc_channels adc_chans_pmic5[ADC_MAX_CHANNEL] = {
 					SCALE_HW_CALIB_DEFAULT)
 	[ADC_MID_CHG_DIV6]	= ADC_CHAN_VOLT("chg_mid_chg", 6,
 					SCALE_HW_CALIB_DEFAULT)
-	//[ADC_XO_THERM_PU2]	= ADC_CHAN_TEMP("xo_therm", 1,
-					//SCALE_HW_CALIB_XOTHERM)
+	[ADC_XO_THERM_PU2]	= ADC_CHAN_TEMP("xo_therm", 1,
+					SCALE_HW_CALIB_XOTHERM)
 	[ADC_BAT_THERM_PU2]	= ADC_CHAN_TEMP("bat_therm_pu2", 1,
 					SCALE_HW_CALIB_BATT_THERM_100K)
+	/*mapenglong@ODM.HQ.BSP.CHG, 2020/05/28, Modify for battery temperature detectionr*/
 	[ADC_BAT_THERM_PU1]	= ADC_CHAN_TEMP("bat_therm_pu1", 1,
 					SCALE_HW_CALIB_DEFAULT)
 	[ADC_BAT_THERM_PU3]	= ADC_CHAN_TEMP("bat_therm_pu3", 1,
 					SCALE_HW_CALIB_BATT_THERM_400K)
 	[ADC_BAT_ID_PU2]	= ADC_CHAN_TEMP("bat_id", 1,
 					SCALE_HW_CALIB_DEFAULT)
-	//[ADC_AMUX_THM1_PU2]	= ADC_CHAN_TEMP("amux_thm1_pu2", 1,
-					//SCALE_HW_CALIB_THERM_100K_PULLUP)
-	//[ADC_AMUX_THM2_PU2]	= ADC_CHAN_TEMP("amux_thm2_pu2", 1,
-					//SCALE_HW_CALIB_THERM_100K_PULLUP)
+	[ADC_AMUX_THM1_PU2]	= ADC_CHAN_TEMP("amux_thm1_pu2", 1,
+					SCALE_HW_CALIB_THERM_100K_PULLUP)
+	[ADC_AMUX_THM2_PU2]	= ADC_CHAN_TEMP("amux_thm2_pu2", 1,
+					SCALE_HW_CALIB_THERM_100K_PULLUP)
 	[ADC_AMUX_THM3_PU2]	= ADC_CHAN_TEMP("amux_thm3_pu2", 1,
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
 	[ADC_AMUX_THM4_PU2]	= ADC_CHAN_TEMP("amux_thm4_pu2", 1,
@@ -923,28 +924,42 @@ static const struct adc_channels adc_chans_pmic5[ADC_MAX_CHANNEL] = {
 					SCALE_HW_CALIB_PM5_SMB_TEMP)
 	[ADC_AMUX_THM3]			= ADC_CHAN_TEMP("amux_thm3", 1,
 					SCALE_HW_CALIB_PM5_SMB_TEMP)
-	[ADC_GPIO1_PU2]	= ADC_CHAN_TEMP("usb_temp1", 1,
+#ifdef VENDOR_EDIT
+/*mapenglong@BSP.CHG.Basic, 2020/06/01, modefy for usb connector temp check*/
+	[ADC_GPIO1_PU2] = ADC_CHAN_VOLT("usb_temp1", 1,
 					SCALE_HW_CALIB_DEFAULT)
-	[ADC_GPIO4_PU2]	= ADC_CHAN_TEMP("usb_temp2", 1,
-					SCALE_HW_CALIB_DEFAULT)
-};
-
-static const struct adc_channels adc_chans_pmic5_I[ADC_MAX_CHANNEL] = {
-	[ADC_REF_GND] = ADC_CHAN_VOLT("ref_gnd", 1,
-						SCALE_HW_CALIB_DEFAULT)
-	[ADC_AMUX_THM1_PU2] = ADC_CHAN_VOLT("amux_thm1_pu2", 1,
-						SCALE_HW_CALIB_THERM_100K_PULLUP)
-	[ADC_AMUX_THM2_PU2]	= ADC_CHAN_TEMP("amux_thm2_pu2", 1,
+#else
+	[ADC_GPIO1_PU2]	= ADC_CHAN_TEMP("gpio1_pu2", 1,
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
-	[ADC_XO_THERM_PU2]	= ADC_CHAN_TEMP("xo_therm", 1,
-						SCALE_HW_CALIB_XOTHERM)
-	[ADC_GPIO1_PU2] = ADC_CHAN_TEMP("gpio1_pu2", 1,
-						SCALE_HW_CALIB_THERM_100K_PULLUP)
-	[ADC_GPIO3_PU2]	= ADC_CHAN_TEMP("gpio3_pu2", 1,
-						SCALE_HW_CALIB_THERM_100K_PULLUP)
+#endif
 
+#ifndef ODM_HQ_EDIT
+/*mapenglong@ODM_HQ.charge 2020/06/19 Read temp*/
+	[ADC_GPIO2_PU2]	= ADC_CHAN_VOLT("gpio2_pu2", 1,
+					SCALE_HW_CALIB_DEFAULT)
+#else
+	[ADC_GPIO2_PU2]	= ADC_CHAN_TEMP("gpio2_pu2", 1,
+					SCALE_HW_CALIB_THERM_100K_PULLUP)
+#endif
+
+//#ifdef ODM_HQ_EDIT
+/*Dianlong.Li@ODM_HQ.SYSTEM 2020/05/21 Read voltage*/
+#ifdef VENDOR_EDIT
+/*mapenglong@BSP.CHG.Basic, 2020/06/01, modefy for usb connector temp check*/
+	[ADC_GPIO3_PU2] = ADC_CHAN_VOLT("usb_temp2", 1,
+					SCALE_HW_CALIB_DEFAULT)
+#else
+	[ADC_GPIO3_PU2] = ADC_CHAN_VOLT("gpio3_pu2", 1,
+					SCALE_HW_CALIB_DEFAULT)
+#endif
+
+//#else
+//	[ADC_GPIO3_PU2]	= ADC_CHAN_TEMP("gpio3_pu2", 1,
+//					SCALE_HW_CALIB_THERM_100K_PULLUP)
+//#endif
+	[ADC_GPIO4_PU2]	= ADC_CHAN_TEMP("gpio4_pu2", 1,
+					SCALE_HW_CALIB_THERM_100K_PULLUP)
 };
-
 
 static const struct adc_channels adc7_chans_pmic[ADC_MAX_CHANNEL] = {
 	[ADC7_REF_GND]		= ADC_CHAN_VOLT("ref_gnd", 0,
@@ -1134,16 +1149,6 @@ const struct adc_data data_pmic5 = {
 					800, 900, 1, 2, 4, 6, 8, 10},
 };
 
-const struct adc_data data_pmic5_I = {
-	.full_scale_code_volt = 0x70e4,
-	/* On PM8150B, IBAT LSB = 10A/32767 */
-	.full_scale_code_cur = 10000,
-	.adc_chans = adc_chans_pmic5_I,
-	.decimation = (unsigned int []) {250, 420, 840},
-	.hw_settle = (unsigned int []) {15, 100, 200, 300, 400, 500, 600, 700,
-					800, 900, 1, 2, 4, 6, 8, 10},
-};
-
 const struct adc_data data_pmic5_lite = {
 	.full_scale_code_volt = 0x70e4,
 	/* On PMI632, IBAT LSB = 5A/32767 */
@@ -1175,10 +1180,6 @@ static const struct of_device_id adc_match_table[] = {
 	{
 		.compatible = "qcom,spmi-adc5",
 		.data = &data_pmic5,
-	},
-	{
-		.compatible = "qcom,spmi-adc5-I",
-		.data = &data_pmic5_I,
 	},
 	{
 		.compatible = "qcom,spmi-adc7",

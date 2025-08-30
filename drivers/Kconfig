@@ -231,5 +231,11 @@ source "drivers/gpu/msm/Kconfig"
 
 source "drivers/energy_model/Kconfig"
 
-source "drivers/oneplus/Kconfig"
+source "drivers/nfc/pn553-i2c/Kconfig"
+
+#ifdef ODM_WT_EDIT
+# Yayong.Duan@ODM_WT.BSP.Kernel.Stability, 2019/08/18, Add for save bootloader log
+source "drivers/wt_sys/Kconfig"
+#endif
+
 endmenu

@@ -6,7 +6,6 @@
 # Rewritten to use lists instead of if-statements.
 #
 
-
 obj-y				+= irqchip/
 obj-y				+= bus/
 
@@ -193,4 +192,7 @@ obj-$(CONFIG_UNISYS_VISORBUS)	+= visorbus/
 obj-$(CONFIG_SIOX)		+= siox/
 obj-$(CONFIG_GNSS)		+= gnss/
 obj-$(CONFIG_SENSORS_SSC)	+= sensors/
-obj-y   			+= oneplus/
+#ifdef ODM_WT_EDIT
+# Hui.Wang@ODM_WT.BSP.Kernel.Stability.1941873, 2019/04/20, Add for save bootloader log
+obj-$(CONFIG_WT_SYSTEM)		+= wt_sys/
+#endif

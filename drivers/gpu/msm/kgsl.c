@@ -23,10 +23,8 @@
 #include "kgsl_debugfs.h"
 #include "kgsl_device.h"
 #include "kgsl_mmu.h"
-#include "kgsl_reclaim.h"
 #include "kgsl_sync.h"
 #include "kgsl_trace.h"
-#include <linux/mm_types.h>
 
 #ifndef arch_mmap_check
 #define arch_mmap_check(addr, len, flags)	(0)
@@ -509,10 +507,6 @@ static void kgsl_mem_entry_detach_process(struct kgsl_mem_entry *entry)
 
 	kgsl_mmu_put_gpuaddr(&entry->memdesc);
 
-	atomic_sub(entry->memdesc.reclaimed_page_count,
-			&entry->priv->reclaimed_page_count);
-
-
 	kgsl_process_private_put(entry->priv);
 
 	entry->priv = NULL;
@@ -984,8 +978,6 @@ static struct kgsl_process_private *kgsl_process_private_new(
 
 	idr_init(&private->mem_idr);
 	idr_init(&private->syncsource_idr);
-
-	kgsl_reclaim_proc_private_init(private);
 
 	/* Allocate a pagetable for the new process object */
 	private->pagetable = kgsl_mmu_getpagetable(&device->mmu, tgid);
@@ -1864,9 +1856,6 @@ long kgsl_ioctl_rb_issueibcmds(struct kgsl_device_private *dev_priv,
 	}
 
 	if (result == 0)
-		result = kgsl_reclaim_to_pinned_state(dev_priv->process_priv);
-
-	if (result == 0)
 		result = dev_priv->device->ftbl->queue_cmds(dev_priv, context,
 				&drawobj, 1, &param->timestamp);
 
@@ -1978,13 +1967,6 @@ long kgsl_ioctl_submit_commands(struct kgsl_device_private *dev_priv,
 		if (cmdobj->profiling_buf_entry == NULL)
 			DRAWOBJ(cmdobj)->flags &=
 				~(unsigned long)KGSL_DRAWOBJ_PROFILING;
-
-		if (type & CMDOBJ_TYPE) {
-			result = kgsl_reclaim_to_pinned_state(
-					dev_priv->process_priv);
-			if (result)
-				goto done;
-		}
 	}
 
 	result = device->ftbl->queue_cmds(dev_priv, context, drawobj,
@@ -2075,13 +2057,6 @@ long kgsl_ioctl_gpu_command(struct kgsl_device_private *dev_priv,
 		if (cmdobj->profiling_buf_entry == NULL)
 			DRAWOBJ(cmdobj)->flags &=
 				~(unsigned long)KGSL_DRAWOBJ_PROFILING;
-
-		if (type & CMDOBJ_TYPE) {
-			result = kgsl_reclaim_to_pinned_state(
-					dev_priv->process_priv);
-			if (result)
-				goto done;
-		}
 	}
 
 	result = device->ftbl->queue_cmds(dev_priv, context, drawobj,
@@ -2807,7 +2782,7 @@ long kgsl_ioctl_gpuobj_import(struct kgsl_device_private *dev_priv,
 	return 0;
 
 unmap:
-	if (param->type == KGSL_USER_MEM_TYPE_DMABUF) {
+	if (kgsl_memdesc_usermem_type(&entry->memdesc) == KGSL_MEM_ENTRY_ION) {
 		kgsl_destroy_ion(entry->priv_data);
 		entry->memdesc.sgt = NULL;
 	}
@@ -3121,7 +3096,7 @@ long kgsl_ioctl_map_user_mem(struct kgsl_device_private *dev_priv,
 	return result;
 
 error_attach:
-	switch (memtype) {
+	switch (kgsl_memdesc_usermem_type(&entry->memdesc)) {
 	case KGSL_MEM_ENTRY_ION:
 		kgsl_destroy_ion(entry->priv_data);
 		entry->memdesc.sgt = NULL;
@@ -3442,7 +3417,6 @@ struct kgsl_mem_entry *gpumem_alloc_entry(
 	struct kgsl_mem_entry *entry;
 	struct kgsl_mmu *mmu = &dev_priv->device->mmu;
 	unsigned int align;
-	u32 cachemode;
 
 	flags &= KGSL_MEMFLAGS_GPUREADONLY
 		| KGSL_CACHEMODE_MASK
@@ -3494,17 +3468,6 @@ struct kgsl_mem_entry *gpumem_alloc_entry(
 		kgsl_sharedmem_free(&entry->memdesc);
 		goto err;
 	}
-
-	cachemode = kgsl_memdesc_get_cachemode(&entry->memdesc);
-	/*
-	 * Secure buffers cannot be reclaimed. Avoid reclaim of cached buffers
-	 * as we could get request for cache operations on these buffers when
-	 * they are reclaimed.
-	 */
-	if (!(flags & KGSL_MEMFLAGS_SECURE) &&
-			!(cachemode == KGSL_CACHEMODE_WRITEBACK) &&
-			!(cachemode == KGSL_CACHEMODE_WRITETHROUGH))
-		entry->memdesc.priv |= KGSL_MEMDESC_CAN_RECLAIM;
 
 	kgsl_process_add_stats(private,
 			kgsl_memdesc_usermem_type(&entry->memdesc),
@@ -4637,7 +4600,6 @@ static unsigned long _gpu_find_svm(struct kgsl_process_private *private,
 {
 	uint64_t addr = kgsl_mmu_find_svm_region(private->pagetable,
 		(uint64_t) start, (uint64_t)end, (uint64_t) len, align);
-
 	WARN(!IS_ERR_VALUE((unsigned long)addr) && (addr > ULONG_MAX),
 		"Couldn't find range\n");
 
@@ -4650,7 +4612,6 @@ static unsigned long _cpu_get_unmapped_area(unsigned long bottom,
 {
 	struct vm_unmapped_area_info info;
 	unsigned long addr, err;
-
 	info.flags = VM_UNMAPPED_AREA_TOPDOWN;
 	info.low_limit = bottom;
 	info.high_limit = top;
@@ -4660,8 +4621,9 @@ static unsigned long _cpu_get_unmapped_area(unsigned long bottom,
 
 	addr = vm_unmapped_area(&info);
 
-	if (IS_ERR_VALUE(addr))
+	if (IS_ERR_VALUE(addr)) {
 		return addr;
+	}
 
 	err = security_mmap_addr(addr);
 	return err ? err : addr;
@@ -4686,7 +4648,6 @@ static unsigned long _search_range(struct kgsl_process_private *private,
 		result = _gpu_set_svm_region(private, entry, cpu, len);
 		if (!IS_ERR_VALUE(result))
 			break;
-
 		trace_kgsl_mem_unmapped_area_collision(entry, cpu, len);
 
 		if (cpu <= start) {
@@ -4696,7 +4657,8 @@ static unsigned long _search_range(struct kgsl_process_private *private,
 
 		/* move downward to the next empty spot on the GPU */
 		gpu = _gpu_find_svm(private, start, cpu, len, align);
-		if (IS_ERR_VALUE(gpu)) {
+
+        if (IS_ERR_VALUE(gpu)) {
 			result = gpu;
 			break;
 		}
@@ -4731,7 +4693,6 @@ static unsigned long _get_svm_area(struct kgsl_process_private *private,
 	uint64_t align;
 	unsigned long result;
 	unsigned long addr;
-	uint64_t svm_start, svm_end;
 
 	if (align_shift >= ilog2(SZ_2M))
 		align = SZ_2M;
@@ -4748,9 +4709,6 @@ static unsigned long _get_svm_area(struct kgsl_process_private *private,
 	if (kgsl_mmu_svm_range(private->pagetable, &start, &end,
 				entry->memdesc.flags))
 		return -ERANGE;
-
-	svm_start = start;
-	svm_end = end;
 
 	/* now clamp the range based on the CPU's requirements */
 	start = max_t(uint64_t, start, mmap_min_addr);
@@ -4793,57 +4751,12 @@ static unsigned long _get_svm_area(struct kgsl_process_private *private,
 	 * Search downwards from the hint first. If that fails we
 	 * must try to search above it.
 	 */
-
-	if (current->mm->va_feature & 0x2) {
-		uint64_t lstart, lend;
-		unsigned long lresult;
-
-		switch (len) {
-		case 4096: case 8192: case 16384: case 32768:
-		case 65536: case 131072: case 262144:
-			lend = current->mm->va_feature_rnd - (dbg_pm[2] * (ilog2(len) - dbg_pm[1]));
-			lstart = current->mm->va_feature_rnd - (dbg_pm[2] * dbg_pm[3]);
-			if (lend <= svm_end && lstart >= svm_start) {
-				lresult = _search_range(private, entry, lstart, lend, len, align);
-				if (!IS_ERR_VALUE(lresult))
-					return lresult;
-			}
-		default:
-			break;
-		}
-	}
-
 	result = _search_range(private, entry, start, addr, len, align);
 	if (IS_ERR_VALUE(result) && hint != 0)
 		result = _search_range(private, entry, addr, end, len, align);
 
 	return result;
 }
-
-static void kgsl_send_uevent_notify(struct kgsl_device *desc, char *comm,
-			unsigned long len, unsigned long total_vm,
-			unsigned long largest_gap_cpu, unsigned long largest_gap_gpu)
-{
-	char *envp[6];
-
-	if (!desc)
-		return;
-
-	envp[0] = kasprintf(GFP_KERNEL, "COMM=%s", comm);
-	envp[1] = kasprintf(GFP_KERNEL, "LEN=%lu", len);
-	envp[2] = kasprintf(GFP_KERNEL, "TOTAL_VM=%lu", total_vm);
-	envp[3] = kasprintf(GFP_KERNEL, "LARGEST_GAP_CPU=%lu", largest_gap_cpu);
-	envp[4] = kasprintf(GFP_KERNEL, "LARGEST_GAP_GPU=%lu", largest_gap_gpu);
-	envp[5] = NULL;
-	kobject_uevent_env(&desc->dev->kobj, KOBJ_CHANGE, envp);
-	kfree(envp[4]);
-	kfree(envp[3]);
-	kfree(envp[2]);
-	kfree(envp[1]);
-	kfree(envp[0]);
-}
-
-static int current_pid = -1;
 
 static unsigned long
 kgsl_get_unmapped_area(struct file *file, unsigned long addr,
@@ -4879,35 +4792,12 @@ kgsl_get_unmapped_area(struct file *file, unsigned long addr,
 					       (int) val);
 	} else {
 		val = _get_svm_area(private, entry, addr, len, flags);
-		if (IS_ERR_VALUE(val)) {
-			struct vm_area_struct *vma;
-			struct mm_struct *mm = current->mm;
-			unsigned long largest_gap_cpu = UINT_MAX;
-			unsigned long largest_gap_gpu = UINT_MAX;
-
+		if (IS_ERR_VALUE(val))
 			dev_err_ratelimited(device->dev,
 					       "_get_svm_area: pid %d mmap_base %lx addr %lx pgoff %lx len %ld failed error %d\n",
 					       private->pid,
 					       current->mm->mmap_base, addr,
 					       pgoff, len, (int) val);
-
-		if (!RB_EMPTY_ROOT(&mm->mm_rb)) {
-			vma = rb_entry(mm->mm_rb.rb_node, struct vm_area_struct, vm_rb);
-			largest_gap_cpu = vma->rb_subtree_gap;
-			largest_gap_gpu = vma->rb_glfragment_gap;
-		}
-
-		if (private->pid != current_pid) {
-			current_pid = private->pid;
-			kgsl_send_uevent_notify(device, current->group_leader->comm,
-			len, mm->total_vm, largest_gap_cpu, largest_gap_gpu);
-		}
-
-		dev_err_ratelimited(device->dev,
-			"kgsl additional info: %s VmSize %lu MaxGapCpu %lu MaxGapGpu %lu VA_rnd 0x%llx\n"
-			, current->group_leader->comm, mm->total_vm, largest_gap_cpu
-			, largest_gap_gpu, mm->va_feature_rnd);
-		}
 	}
 
 put:
@@ -4985,17 +4875,7 @@ static int kgsl_mmap(struct file *file, struct vm_area_struct *vma)
 
 	vma->vm_file = file;
 
-	entry->memdesc.vma = vma;
 	entry->memdesc.useraddr = vma->vm_start;
-
-	/*
-	 * kgsl gets the entry id or the gpu address through vm_pgoff.
-	 * It is used during mmap and never needed again. But this vm_pgoff
-	 * has different meaning at other parts of kernel. Not setting to
-	 * zero will let way for wrong assumption when tried to unmap a page
-	 * from this vma.
-	 */
-	vma->vm_pgoff = 0;
 
 	trace_kgsl_mem_mmap(entry);
 	return 0;
@@ -5217,10 +5097,6 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 	/* Initialize the memory pools */
 	kgsl_init_page_pools(device->pdev);
 
-	status = kgsl_reclaim_init();
-	if (status)
-		goto error_close_mmu;
-
 	/*
 	 * The default request type PM_QOS_REQ_ALL_CORES is
 	 * applicable to all CPU cores that are online and
@@ -5312,8 +5188,6 @@ static void kgsl_core_exit(void)
 {
 	kgsl_events_exit();
 	kgsl_core_debugfs_close();
-
-	kgsl_reclaim_close();
 
 	/*
 	 * We call kgsl_sharedmem_uninit_sysfs() and device_unregister()

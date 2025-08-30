@@ -41,8 +41,6 @@
 #include <linux/rculist.h>
 #include <linux/poll.h>
 #include <linux/irq_work.h>
-#include <linux/rtc.h>
-#include <linux/time.h>
 #include <linux/ctype.h>
 #include <linux/uio.h>
 #include <linux/sched/clock.h>
@@ -60,19 +58,55 @@
 #include "braille.h"
 #include "internal.h"
 
-bool dual_sim = true;
-EXPORT_SYMBOL(dual_sim);
-
-module_param_named(dual_sim, dual_sim, bool, 0444);
-static int __init printk_board_id(char *str)
+#ifdef VENDOR_EDIT
+/*xing.xiong@BSP.Kernel.Driver, 2019/06/14, Add for uart control via cmdline*/
+#include <soc/oppo/boot_mode.h>
+static bool __read_mostly printk_disable_uart = true; /*set true avoid early console output*/
+static int oppo_ftm_mode = MSM_BOOT_MODE__NORMAL;
+static int __init oppo_ftm_mode_check(char *str)
 {
-	if (!strcmp(str, "na"))
-		dual_sim = false;
+if (str) {
+		if (strncmp(str, "factory2", 5) == 0) {
+			oppo_ftm_mode = MSM_BOOT_MODE__FACTORY;
+			pr_err("kernel ftm OK\r\n");
+		} else if (strncmp(str, "ftmwifi", 5) == 0) {
+			oppo_ftm_mode = MSM_BOOT_MODE__WLAN;
+		} else if (strncmp(str, "ftmmos", 5) == 0) {
+			oppo_ftm_mode = MSM_BOOT_MODE__MOS;
+		} else if (strncmp(str, "ftmrf", 5) == 0) {
+			oppo_ftm_mode = MSM_BOOT_MODE__RF;
+		} else if (strncmp(str, "ftmrecovery", 5) == 0) {
+			oppo_ftm_mode = MSM_BOOT_MODE__RECOVERY;
+		} else if (strncmp(str, "ftmsilence", 10) == 0) {
+			oppo_ftm_mode = MSM_BOOT_MODE__SILENCE;
+		} else if (strncmp(str, "ftmsau", 6) == 0) {
+			oppo_ftm_mode = MSM_BOOT_MODE__SAU;
+        //xiaofan.yang@PSW.TECH.AgingTest, 2019/01/07,Add for factory agingtest
+        } else if (strncmp(str, "ftmaging", 8) == 0) {
+            oppo_ftm_mode = MSM_BOOT_MODE__AGING;
+		} else if (strncmp(str, "ftmsafe", 7) == 0) {
+			oppo_ftm_mode = MSM_BOOT_MODE__SAFE;
+		}
+	}
 
 	return 0;
 }
-__setup("pcb_board_id=", printk_board_id);
+early_param("oppo_ftm_mode", oppo_ftm_mode_check);
 
+static int __init printk_uart_disabled(char *str)
+{
+	if (str[0] == '1')
+		printk_disable_uart = true;
+	else
+		printk_disable_uart = false;
+	return 0;
+}
+early_param("printk.disable_uart", printk_uart_disabled);
+bool oem_disable_uart(void)
+{
+	return printk_disable_uart;
+}
+#endif /*VENDOR_EDIT*/
 int console_printk[4] = {
 	CONSOLE_LOGLEVEL_DEFAULT,	/* console_loglevel */
 	MESSAGE_LOGLEVEL_DEFAULT,	/* default_message_loglevel */
@@ -608,6 +642,21 @@ static int log_store(int facility, int level,
 	u32 size, pad_len;
 	u16 trunc_msg_len = 0;
 
+	#ifdef VENDOR_EDIT
+	//part 1/2: yixue.ge 2015-04-22 add for add cpu number and current id and current comm to kmsg
+	int this_cpu = smp_processor_id();
+	char tbuf[64];
+	unsigned tlen;
+
+	if (console_suspended == 0) {
+		tlen = snprintf(tbuf, sizeof(tbuf), " (%x)[%d:%s]",
+			this_cpu, current->pid, current->comm);
+	} else {
+		tlen = snprintf(tbuf, sizeof(tbuf), " %x)", this_cpu);
+	}
+	text_len += tlen;
+	#endif //add end part 1/3
+
 	/* number of '\0' padding bytes to next message */
 	size = msg_used_size(text_len, dict_len, &pad_len);
 
@@ -632,7 +681,13 @@ static int log_store(int facility, int level,
 
 	/* fill message */
 	msg = (struct printk_log *)(log_buf + log_next_idx);
+	#ifndef VENDOR_EDIT
+	//part 2/2: yixue.ge 2015-04-22 add for add cpu number and current id and current comm to kmsg
 	memcpy(log_text(msg), text, text_len);
+	#else
+	memcpy(log_text(msg), tbuf, tlen);
+	memcpy(log_text(msg) + tlen, text, text_len-tlen);
+	#endif //add end part 3/3
 	msg->text_len = text_len;
 	if (trunc_msg_len) {
 		memcpy(log_text(msg) + text_len, trunc_msg, trunc_msg_len);
@@ -791,12 +846,14 @@ static ssize_t devkmsg_write(struct kiocb *iocb, struct iov_iter *from)
 	/* Ignore when user logging is disabled. */
 	if (devkmsg_log & DEVKMSG_LOG_MASK_OFF)
 		return len;
-
+#ifndef WT_FINAL_RELEASE
+//Yayong.Duan@ODM_WT.SYS.Stability, 2020/08/19, remove init log limit in kernal log
 	/* Ratelimit when not explicitly enabled. */
 	if (!(devkmsg_log & DEVKMSG_LOG_MASK_ON)) {
 		if (!___ratelimit(&user->rs, current->comm))
 			return ret;
 	}
+#endif
 
 	buf = kmalloc(len+1, GFP_KERNEL);
 	if (buf == NULL)
@@ -1116,14 +1173,6 @@ static void __init log_buf_add_cpu(void)
 static inline void log_buf_add_cpu(void) {}
 #endif /* CONFIG_SMP */
 
-static int __init ftm_console_silent_setup(char *str)
-{
-	pr_info("ftm_silent_log\n");
-	console_silent();
-	return 0;
-}
-early_param("ftm_console_silent", ftm_console_silent_setup);
-
 void __init setup_log_buf(int early)
 {
 	unsigned long flags;
@@ -1244,8 +1293,21 @@ static inline void boot_delay_msec(int level)
 static bool printk_time = IS_ENABLED(CONFIG_PRINTK_TIME);
 module_param_named(time, printk_time, bool, S_IRUGO | S_IWUSR);
 
-static bool print_wall_time = 1;
-module_param_named(print_wall_time, print_wall_time, bool, 0644);
+static size_t print_time(u64 ts, char *buf)
+{
+	unsigned long rem_nsec;
+
+	if (!printk_time)
+		return 0;
+
+	rem_nsec = do_div(ts, 1000000000);
+
+	if (!buf)
+		return snprintf(NULL, 0, "[%5lu.000000] ", (unsigned long)ts);
+
+	return sprintf(buf, "[%5lu.%06lu] ",
+		       (unsigned long)ts, rem_nsec / 1000);
+}
 
 static size_t print_prefix(const struct printk_log *msg, bool syslog, char *buf)
 {
@@ -1265,6 +1327,8 @@ static size_t print_prefix(const struct printk_log *msg, bool syslog, char *buf)
 				len++;
 		}
 	}
+
+	len += print_time(msg->ts_nsec, buf ? buf + len : NULL);
 	return len;
 }
 
@@ -1729,6 +1793,15 @@ static void call_console_drivers(const char *ext_text, size_t ext_len,
 		return;
 
 	for_each_console(con) {
+#ifdef VENDOR_EDIT
+/* Jianchao.Shi@BSP.CHG.Basic, 2019/10/09, sjc Add for uart control via cmdline */
+		if ((con->flags & (CON_CONSDEV | CON_BOOT)) &&
+				(printk_disable_uart ||
+				oppo_ftm_mode == MSM_BOOT_MODE__FACTORY ||
+				oppo_ftm_mode == MSM_BOOT_MODE__RF ||
+				oppo_ftm_mode == MSM_BOOT_MODE__WLAN))
+			continue;
+#endif /*VENDOR_EDIT*/
 		if (exclusive_console && con != exclusive_console)
 			continue;
 		if (!(con->flags & CON_ENABLED))
@@ -1859,12 +1932,6 @@ int vprintk_store(int facility, int level,
 	char *text = textbuf;
 	size_t text_len;
 	enum log_flags lflags = 0;
-	static char texttmp[LOG_LINE_MAX];
-	static bool last_new_line = true;
-	u64 ts_sec = local_clock();
-	unsigned long rem_nsec;
-
-	rem_nsec = do_div(ts_sec, 1000000000);
 
 	/*
 	 * The printf needs to come first; we need the syslog
@@ -1899,42 +1966,6 @@ int vprintk_store(int facility, int level,
 			text += 2;
 		}
 	}
-	if (last_new_line) {
-		if (print_wall_time && ts_sec >= 20) {
-			struct timespec64 tspec;
-			struct rtc_time tm;
-
-			__getnstimeofday64(&tspec);
-
-			if (sys_tz.tz_minuteswest < 0
-				|| (tspec.tv_sec-sys_tz.tz_minuteswest*60) >= 0)
-				tspec.tv_sec -= sys_tz.tz_minuteswest * 60;
-			rtc_time_to_tm(tspec.tv_sec, &tm);
-
-			text_len = scnprintf(texttmp, sizeof(texttmp),
-				"[%02d%02d%02d_%02d:%02d:%02d.%06ld]@%d %s",
-				tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-				tm.tm_hour, tm.tm_min, tm.tm_sec,
-				tspec.tv_nsec / 1000, raw_smp_processor_id(), text);
-		} else {
-			text_len = scnprintf(texttmp, sizeof(texttmp),
-				"[%5lu.%06lu]@%d %s", (unsigned long)ts_sec,
-				rem_nsec / 1000, raw_smp_processor_id(), text);
-		}
-
-		text = texttmp;
-
-		/* mark and strip a trailing newline */
-		if (text_len && text[text_len-1] == '\n') {
-			text_len--;
-			lflags |= LOG_NEWLINE;
-		}
-	}
-
-	if (lflags & LOG_NEWLINE)
-		last_new_line = true;
-	else
-		last_new_line = false;
 
 	if (level == LOGLEVEL_DEFAULT)
 		level = default_message_loglevel;
@@ -2164,7 +2195,7 @@ __setup("console_msg_format=", console_msg_format_setup);
  * Set up a console.  Called via do_early_param() in init/main.c
  * for each "console=" parameter in the boot command line.
  */
-static int console_setup(char *str)
+static int __init console_setup(char *str)
 {
 	char buf[sizeof(console_cmdline[0].name) + 4]; /* 4 for "ttyS" */
 	char *s, *options, *brl_options = NULL;
@@ -2203,14 +2234,6 @@ static int console_setup(char *str)
 	return 1;
 }
 __setup("console=", console_setup);
-
-int  force_oem_console_setup(char *str)
-{
-	console_setup(str);
-	return 1;
-}
-EXPORT_SYMBOL(force_oem_console_setup);
-
 
 /**
  * add_preferred_console - add a device to the list of preferred consoles.

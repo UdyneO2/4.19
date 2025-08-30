@@ -72,6 +72,11 @@
 #include <linux/uaccess.h>
 #include <asm/processor.h>
 
+#ifdef VENDOR_EDIT
+/* Hailong.Liu@TECH.Kernel.CPU, 2019/10/24, stat cpu usage on each tick. */
+#include <linux/kernel_stat.h>
+#endif /* VENDOR_EDIT */
+
 #ifdef CONFIG_X86
 #include <asm/nmi.h>
 #include <asm/stacktrace.h>
@@ -97,6 +102,11 @@
 #include <linux/nmi.h>
 #endif
 
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MULTI_KSWAPD)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-22,add multi kswapd support*/
+#include <linux/oppo_multi_kswapd.h>
+#endif /*VENDOR_EDIT*/
+
 #if defined(CONFIG_SYSCTL)
 
 /* External variables not in a header file. */
@@ -106,9 +116,6 @@ extern int core_uses_pid;
 extern char core_pattern[];
 extern unsigned int core_pipe_limit;
 #endif
-#ifdef CONFIG_DIRECT_SWAPPINESS
-extern int vm_direct_swapiness;
-#endif
 extern int pid_max;
 extern int extra_free_kbytes;
 extern int pid_max_min, pid_max_max;
@@ -117,10 +124,6 @@ extern int latencytop_enabled;
 extern unsigned int sysctl_nr_open_min, sysctl_nr_open_max;
 #ifndef CONFIG_MMU
 extern int sysctl_nr_trim_pages;
-#endif
-
-#ifdef CONFIG_F2FS_FS
-extern unsigned int f2fs_dis_cp_ratio;
 #endif
 
 /* Constants used for minimum and  maximum */
@@ -140,13 +143,18 @@ static unsigned long zero_ul;
 static unsigned long one_ul = 1;
 static unsigned long long_max = LONG_MAX;
 static int one_hundred = 100;
-static int one_thousand = 1000;
-#ifdef CONFIG_PANIC_FLUSH
-unsigned long sysctl_blkdev_issue_flush_count;
-#endif
-#ifdef CONFIG_DIRECT_SWAPPINESS
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_ZRAM_OPT)
+/*yixue.ge@PSW.BSP.Kernel.Driver 20170720 add for add direct_vm_swappiness*/
+extern int direct_vm_swappiness;
 static int two_hundred = 200;
-#endif
+#endif /*VENDOR_EDIT*/
+
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_FG_IO_OPT)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-23,add foreground io opt*/
+unsigned int sysctl_fg_io_opt = 1;
+#endif /*VENDOR_EDIT*/
+
+static int one_thousand = 1000;
 #ifdef CONFIG_PRINTK
 static int ten_thousand = 10000;
 #endif
@@ -177,7 +185,16 @@ static const int cap_last_cap = CAP_LAST_CAP;
  */
 #ifdef CONFIG_DETECT_HUNG_TASK
 static unsigned long hung_task_timeout_max = (LONG_MAX/HZ);
+#if defined(VENDOR_EDIT) && defined(CONFIG_DEATH_HEALER)
+/* Bin.Xu@BSP.Kernel.Stability, 2020/05/23, DeathHealer, Foreground background optimization,change max io count */
+static int five = 5;
+#endif /* VENDOR_EDIT */
 #endif
+
+//xiaoqiang.he@oppo.com 2020-07-15, add for super power save mode
+#ifdef VENDOR_EDIT
+int super_power_save_mode = 0;
+#endif /* VENDOR_EDIT */
 
 #ifdef CONFIG_INOTIFY_USER
 #include <linux/inotify.h>
@@ -336,10 +353,7 @@ static int max_sched_tunable_scaling = SCHED_TUNABLESCALING_END-1;
 #endif /* CONFIG_SMP */
 #endif /* CONFIG_SCHED_DEBUG */
 
-#ifdef CONFIG_UXCHAIN
-int sysctl_uxchain_enabled = 1;
-int sysctl_launcher_boost_enabled;
-#endif
+
 #ifdef CONFIG_COMPACTION
 static int min_extfrag_threshold;
 static int max_extfrag_threshold = 1000;
@@ -353,24 +367,6 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
-#ifdef CONFIG_F2FS_FS
-	{
-		.procname       = "f2fs_dis_cp_thresh",
-		.data           = &f2fs_dis_cp_ratio,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
-	},
-#endif
-#ifdef CONFIG_PANIC_FLUSH
-	{
-	       .procname       = "blkdev_issue_flush_count",
-	       .data           = &sysctl_blkdev_issue_flush_count,
-	       .maxlen         = sizeof(unsigned long),
-	       .mode           = 0644,
-	       .proc_handler   = proc_dointvec,
-	},
-#endif
 #if defined(CONFIG_PREEMPT_TRACER) && defined(CONFIG_PREEMPTIRQ_EVENTS)
 	{
 		.procname       = "preemptoff_tracing_threshold_ns",
@@ -419,7 +415,11 @@ static struct ctl_table kern_table[] = {
 		.procname	= "sched_group_upmigrate",
 		.data		= &sysctl_sched_group_upmigrate_pct,
 		.maxlen		= sizeof(unsigned int),
+#ifdef VENDOR_EDIT
+		.mode		= 0664,
+#else
 		.mode		= 0644,
+#endif
 		.proc_handler	= walt_proc_group_thresholds_handler,
 		.extra1		= &sysctl_sched_group_downmigrate_pct,
 	},
@@ -427,7 +427,11 @@ static struct ctl_table kern_table[] = {
 		.procname	= "sched_group_downmigrate",
 		.data		= &sysctl_sched_group_downmigrate_pct,
 		.maxlen		= sizeof(unsigned int),
+#ifdef VENDOR_EDIT
+		.mode		= 0664,
+#else
 		.mode		= 0644,
+#endif
 		.proc_handler	= walt_proc_group_thresholds_handler,
 		.extra1		= &zero,
 		.extra2		= &sysctl_sched_group_upmigrate_pct,
@@ -444,15 +448,6 @@ static struct ctl_table kern_table[] = {
 	{
 		.procname	= "sched_conservative_pl",
 		.data		= &sysctl_sched_conservative_pl,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
-	},
-	{
-		.procname	= "sched_skip_affinity",
-		.data		= &sysctl_sched_skip_affinity,
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
@@ -572,6 +567,16 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sched_ravg_window_handler,
 	},
+//#ifdef COLOROS_EDIT
+/*Tiren.Ma@ROM.Framework, 2020-01-19, add for super power save mode*/
+	{
+		.procname	= "super_power_save_mode",
+		.data		= &super_power_save_mode,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0664,
+		.proc_handler	= proc_dointvec,
+	},
+//#endif /*COLOROS_EDIT*/
 	{
 		.procname	= "sched_dynamic_ravg_window_enable",
 		.data		= &sysctl_sched_dynamic_ravg_window_enable,
@@ -585,14 +590,22 @@ static struct ctl_table kern_table[] = {
 		.procname	= "sched_upmigrate",
 		.data		= &sysctl_sched_capacity_margin_up,
 		.maxlen		= sizeof(unsigned int) * MAX_MARGIN_LEVELS,
+#ifdef VENDOR_EDIT
+		.mode		= 0664,
+#else
 		.mode		= 0644,
+#endif
 		.proc_handler	= sched_updown_migrate_handler,
 	},
 	{
 		.procname	= "sched_downmigrate",
 		.data		= &sysctl_sched_capacity_margin_down,
 		.maxlen		= sizeof(unsigned int) * MAX_MARGIN_LEVELS,
+#ifdef VENDOR_EDIT
+		.mode		= 0664,
+#else
 		.mode		= 0644,
+#endif
 		.proc_handler	= sched_updown_migrate_handler,
 	},
 	{
@@ -605,6 +618,16 @@ static struct ctl_table kern_table[] = {
 		.extra2		= &two,
 	},
 #endif
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_FG_IO_OPT)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-23,add foreground io opt*/
+	{
+		.procname	= "fg_io_opt",
+		.data		= &sysctl_fg_io_opt,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif /*VENDOR_EDIT*/
 #ifdef CONFIG_SCHED_DEBUG
 	{
 		.procname       = "sched_cstate_aware",
@@ -1434,7 +1457,24 @@ static struct ctl_table kern_table[] = {
 		.extra1		= &zero,
 		.extra2		= &one,
 	},
-
+#if defined(VENDOR_EDIT) && defined(CONFIG_DEATH_HEALER)
+/* Bin.Xu@BSP.Kernel.Stability, 2020/05/23, DeathHealer, record the hung task killing */
+	{
+		.procname	= "hung_task_oppo_kill",
+		.data		= &sysctl_hung_task_oppo_kill,
+		.maxlen		= 128,
+		.mode		= 0666,
+		.proc_handler	= proc_dostring,
+	},
+	{
+		.procname	= "hung_task_maxiowait_count",
+		.data		= &sysctl_hung_task_maxiowait_count,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &five,
+	},
+#endif /* VENDOR_EDIT */
 #endif
 #ifdef CONFIG_RT_MUTEXES
 	{
@@ -1576,20 +1616,16 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 #endif
-#ifdef CONFIG_UXCHAIN
+#ifdef VENDOR_EDIT
+/* Hailong.Liu@TECH.Kernel.CPU, 2019/10/24, stat cpu usage on each tick. */
 	{
-		.procname	= "uxchain_enabled",
-		.data		= &sysctl_uxchain_enabled,
-		.maxlen = sizeof(int),
+		.procname	= "task_cpustats_enable",
+		.data		= &sysctl_task_cpustats_enable,
+		.maxlen		= sizeof(unsigned int),
 		.mode		= 0666,
-		.proc_handler = proc_dointvec,
-	},
-	{
-		.procname	= "launcher_boost_enabled",
-		.data		= &sysctl_launcher_boost_enabled,
-		.maxlen = sizeof(int),
-		.mode		= 0666,
-		.proc_handler = proc_dointvec,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
 	},
 #endif
 	{ }
@@ -1650,7 +1686,7 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= overcommit_kbytes_handler,
 	},
 	{
-		.procname	= "page-cluster", 
+		.procname	= "page-cluster",
 		.data		= &page_cluster,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
@@ -1712,19 +1748,8 @@ static struct ctl_table vm_table[] = {
 		.maxlen		= sizeof(dirtytime_expire_interval),
 		.mode		= 0644,
 		.proc_handler	= dirtytime_interval_handler,
-		.extra2		= &one_hundred,
-	},
-#ifdef CONFIG_DIRECT_SWAPPINESS
-	{
-		.procname	= "direct_swappiness",
-		.data		= &vm_direct_swapiness,
-		.maxlen		= sizeof(vm_direct_swapiness),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
-		.extra2		= &two_hundred,
 	},
-#endif
 	{
 		.procname	= "swappiness",
 		.data		= &vm_swappiness,
@@ -1732,12 +1757,25 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
-#ifdef CONFIG_DIRECT_SWAPPINESS
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_ZRAM_OPT)
+/*yixue.ge@PSW.BSP.Kernel.Driver 20170720 add for add direct_vm_swappiness*/
 		.extra2		= &two_hundred,
 #else
 		.extra2		= &one_hundred,
-#endif
+#endif /*VENDOR_EDIT*/
 	},
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_ZRAM_OPT)
+/*yixue.ge@PSW.BSP.Kernel.Driver 20170720 add for add direct_vm_swappiness*/
+	{
+		.procname	= "direct_swappiness",
+		.data		= &direct_vm_swappiness,
+		.maxlen 	= sizeof(direct_vm_swappiness),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1 	= &zero,
+		.extra2 	= &two_hundred,
+	},
+#endif
 	{
 		.procname       = "want_old_faultaround_pte",
 		.data           = &want_old_faultaround_pte,
@@ -1799,7 +1837,8 @@ static struct ctl_table vm_table[] = {
 		.procname	= "drop_caches",
 		.data		= &sysctl_drop_caches,
 		.maxlen		= sizeof(int),
-		.mode		= 0200,
+		/* liunianliang@ODM_HQ.BSP.System, modify from 0200 to 0644 for AgingTest.20200611 */
+		.mode		= 0644,
 		.proc_handler	= drop_caches_sysctl_handler,
 		.extra1		= &one,
 		.extra2		= &four,
@@ -1809,7 +1848,13 @@ static struct ctl_table vm_table[] = {
 		.procname	= "compact_memory",
 		.data		= &sysctl_compact_memory,
 		.maxlen		= sizeof(int),
+#ifdef VENDOR_EDIT
+/*Huacai.Zhou@PSW.kernel.mm, 2018-08-20, modify permission for coloros.athena*/
+		.mode		= 0222,
+#else
 		.mode		= 0200,
+
+#endif /*VENDOR_EDIT*/
 		.proc_handler	= sysctl_compaction_handler,
 	},
 	{
@@ -1840,6 +1885,18 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= min_free_kbytes_sysctl_handler,
 		.extra1		= &zero,
 	},
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MULTI_KSWAPD)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-22,add multi kswapd support*/
+	{
+	.procname	= "kswapd_threads",
+	.data		= &kswapd_threads,
+	.maxlen		= sizeof(kswapd_threads),
+	.mode		= 0644,
+	.proc_handler	= kswapd_threads_sysctl_handler,
+	.extra1		= &one,
+	.extra2		= &max_kswapd_threads,
+},
+#endif /*VENDOR_EDIT*/
 	{
 		.procname	= "watermark_boost_factor",
 		.data		= &watermark_boost_factor,
@@ -2204,7 +2261,7 @@ static struct ctl_table fs_table[] = {
 		.mode		= 0555,
 		.child		= inotify_table,
 	},
-#endif	
+#endif
 #ifdef CONFIG_EPOLL
 	{
 		.procname	= "epoll",
@@ -2649,12 +2706,12 @@ static int __do_proc_dointvec(void *tbl_data, struct ctl_table *table,
 	int *i, vleft, first = 1, err = 0;
 	size_t left;
 	char *kbuf = NULL, *p;
-	
+
 	if (!tbl_data || !table->maxlen || !*lenp || (*ppos && !write)) {
 		*lenp = 0;
 		return 0;
 	}
-	
+
 	i = (int *) tbl_data;
 	vleft = table->maxlen / sizeof(*i);
 	left = *lenp;
@@ -2880,7 +2937,7 @@ static int do_proc_douintvec(struct ctl_table *table, int write,
  * @ppos: file position
  *
  * Reads/writes up to table->maxlen/sizeof(unsigned int) integer
- * values from/to the user buffer, treated as an ASCII string. 
+ * values from/to the user buffer, treated as an ASCII string.
  *
  * Returns 0 on success.
  */
@@ -3395,7 +3452,7 @@ static int do_proc_dointvec_ms_jiffies_conv(bool *negp, unsigned long *lvalp,
  * @ppos: file position
  *
  * Reads/writes up to table->maxlen/sizeof(unsigned int) integer
- * values from/to the user buffer, treated as an ASCII string. 
+ * values from/to the user buffer, treated as an ASCII string.
  * The values read are assumed to be in seconds, and are converted into
  * jiffies.
  *
@@ -3417,8 +3474,8 @@ int proc_dointvec_jiffies(struct ctl_table *table, int write,
  * @ppos: pointer to the file position
  *
  * Reads/writes up to table->maxlen/sizeof(unsigned int) integer
- * values from/to the user buffer, treated as an ASCII string. 
- * The values read are assumed to be in 1/USER_HZ seconds, and 
+ * values from/to the user buffer, treated as an ASCII string.
+ * The values read are assumed to be in 1/USER_HZ seconds, and
  * are converted into jiffies.
  *
  * Returns 0 on success.
@@ -3440,8 +3497,8 @@ int proc_dointvec_userhz_jiffies(struct ctl_table *table, int write,
  * @ppos: the current position in the file
  *
  * Reads/writes up to table->maxlen/sizeof(unsigned int) integer
- * values from/to the user buffer, treated as an ASCII string. 
- * The values read are assumed to be in 1/1000 seconds, and 
+ * values from/to the user buffer, treated as an ASCII string.
+ * The values read are assumed to be in 1/1000 seconds, and
  * are converted into jiffies.
  *
  * Returns 0 on success.

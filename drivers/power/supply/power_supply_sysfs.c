@@ -282,6 +282,8 @@ static ssize_t power_supply_store_property(struct device *dev,
 /* Must be in the same order as POWER_SUPPLY_PROP_* */
 static struct device_attribute power_supply_attrs[] = {
 	/* Properties of type `int' */
+#ifdef VENDOR_EDIT
+/* Jianchao,Shi@BSP.CHG.Basic, 2016/12/20, sjc Add for charging */
 	POWER_SUPPLY_ATTR(battery_request_poweroff),
 	POWER_SUPPLY_ATTR(InstatVolt),
 	POWER_SUPPLY_ATTR(BatteryAverageCurrent),
@@ -305,15 +307,15 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(usbtemp_volt_l),
 	POWER_SUPPLY_ATTR(usbtemp_volt_r),
 
-#ifdef CONFIG_ONEPLUS_SMART_CHARGER_SUPPORT
+#ifdef CONFIG_OPPO_SMART_CHARGER_SUPPORT
 	POWER_SUPPLY_ATTR(cool_down),
 #endif
 
-#ifdef CONFIG_ONEPLUS_CHIP_SOC_NODE
+#ifdef CONFIG_OPPO_CHIP_SOC_NODE
 	POWER_SUPPLY_ATTR(chip_soc),
 #endif
 
-#ifdef CONFIG_ONEPLUS_SHORT_USERSPACE
+#ifdef CONFIG_OPPO_SHORT_USERSPACE
 	POWER_SUPPLY_ATTR(short_c_batt_limit_chg),
 	POWER_SUPPLY_ATTR(short_c_batt_limit_rechg),
 #else
@@ -322,7 +324,7 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(short_c_batt_cv_status),
 #endif
 	
-#ifdef CONFIG_ONEPLUS_SHORT_IC_CHECK
+#ifdef CONFIG_OPPO_SHORT_IC_CHECK
 	POWER_SUPPLY_ATTR(short_ic_otp_status),
 	POWER_SUPPLY_ATTR(short_ic_volt_thresh),
 	POWER_SUPPLY_ATTR(short_ic_otp_value),
@@ -330,6 +332,7 @@ static struct device_attribute power_supply_attrs[] = {
 
 	POWER_SUPPLY_ATTR(ctrl_by_hotspot),
 	POWER_SUPPLY_ATTR(ctrl_by_camera),
+#endif  /* VENDOR_EDIT */
 
 	POWER_SUPPLY_ATTR(status),
 	POWER_SUPPLY_ATTR(charge_type),
@@ -405,7 +408,6 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(charge_now_error),
 	POWER_SUPPLY_ATTR(capacity_raw),
 	POWER_SUPPLY_ATTR(battery_charging_enabled),
-	POWER_SUPPLY_ATTR(op_disable_charge),
 	POWER_SUPPLY_ATTR(charging_enabled),
 	POWER_SUPPLY_ATTR(step_charging_enabled),
 	POWER_SUPPLY_ATTR(step_charging_step),
@@ -464,10 +466,13 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(parallel_disable),
 	POWER_SUPPLY_ATTR(pe_start),
 	POWER_SUPPLY_ATTR(soc_reporting_ready),
+#ifdef VENDOR_EDIT
+/* Yichun.Chen  PSW.BSP.CHG  2018-06-04  save soc */
 	POWER_SUPPLY_ATTR(battery_info),
 	POWER_SUPPLY_ATTR(battery_info_id),
 	POWER_SUPPLY_ATTR(soc_notify_ready),
 	POWER_SUPPLY_ATTR(restore_soc),
+#endif
 	POWER_SUPPLY_ATTR(debug_battery),
 	POWER_SUPPLY_ATTR(fcc_delta),
 	POWER_SUPPLY_ATTR(icl_reduction),
@@ -536,34 +541,44 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(irq_status),
 	POWER_SUPPLY_ATTR(parallel_output_mode),
 	POWER_SUPPLY_ATTR(fg_type),
+//#ifdef ODM_WT_EDIT
+	/* Bin2.Zhang@ODM_WT.BSP.Charger.Basic, 2020-07-27, Add for charging sysfs. */
+	POWER_SUPPLY_ATTR(StopCharging_Test),
+	POWER_SUPPLY_ATTR(StartCharging_Test),
+//#endif /* ODM_WT_EDIT */
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_ATTR(charge_counter_ext),
+#ifdef VENDOR_EDIT
+/* Jianchao,Shi@BSP.CHG.Basic, 2016/12/20, sjc Add for charging */
 	POWER_SUPPLY_ATTR(adjust_power),
 	POWER_SUPPLY_ATTR(adapter_fw_update),
-	POWER_SUPPLY_ATTR(warpchg_ing),
+	POWER_SUPPLY_ATTR(voocchg_ing),
 	POWER_SUPPLY_ATTR(call_mode),
 	POWER_SUPPLY_ATTR(chargerid_volt),
 	POWER_SUPPLY_ATTR(primal_type),
 	POWER_SUPPLY_ATTR(ship_mode),
-
-#ifdef CONFIG_ONEPLUS_SHORT_HW_CHECK
+#endif /* VENDOR_EDIT */
+#ifdef VENDOR_EDIT//Fanhong.Kong@PSW.BSP.CHG, 2017/10/20, Add for hw battery check
+#ifdef CONFIG_OPPO_SHORT_HW_CHECK
 	POWER_SUPPLY_ATTR(short_c_hw_feature),
 	POWER_SUPPLY_ATTR(short_c_hw_status),
 #endif	
-
+#endif /*VENDOR_EDIT*/
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_ATTR(model_name),
 	POWER_SUPPLY_ATTR(manufacturer),
 	POWER_SUPPLY_ATTR(battery_type),
 	POWER_SUPPLY_ATTR(cycle_counts),
 	POWER_SUPPLY_ATTR(serial_number),
-	POWER_SUPPLY_ATTR(batt_torch),
-	POWER_SUPPLY_ATTR(connector_temp1),
-	POWER_SUPPLY_ATTR(connector_temp2),
-	POWER_SUPPLY_ATTR(connect_disable),
-	POWER_SUPPLY_ATTR(remaining_capacity),
-	POWER_SUPPLY_ATTR(parallel_current_now),
-	POWER_SUPPLY_ATTR(smb1355_test),
+#ifdef VENDOR_EDIT
+    /* Boyu.Wen  PSW.BSP.CHG  2020-1-19  for Fixed a problem with unstable torch current */
+    POWER_SUPPLY_ATTR(batt_torch),
+#endif
+#ifdef ODM_HQ_EDIT
+    /* Yuzhe.Peng@ODM.BSP.CHARGE 2020/09/11 add for parallel current */
+    POWER_SUPPLY_ATTR(parallel_current_now),
+    POWER_SUPPLY_ATTR(smb1355_test),
+#endif
 };
 
 static struct attribute *
@@ -588,8 +603,12 @@ static umode_t power_supply_attr_is_visible(struct kobject *kobj,
 			if (psy->desc->property_is_writeable &&
 			    psy->desc->property_is_writeable(psy, property) > 0)
 				mode |= S_IWUSR;
+#ifdef VENDOR_EDIT
+/* Liulitian@ODM.BSP.charge, 2020/04/28, for slave charger current test */
 			if (property == POWER_SUPPLY_PROP_SMB1355_TEST)
-				mode |= 0020;
+				mode |= S_IWGRP;
+#endif
+
 			return mode;
 		}
 	}
@@ -658,9 +677,18 @@ int power_supply_uevent(struct device *dev, struct kobj_uevent_env *env)
 		struct device_attribute *attr;
 		char *line;
 
+	//#ifdef ODM_WT_EDIT
+		/* Bin2.Zhang@ODM_WT.BSP.Charger.Basic, 20200803, Add start/stop charging property */
+		if ((psy->desc->properties[j] == POWER_SUPPLY_PROP_STOPCHARGING_TEST)
+				|| (psy->desc->properties[j] == POWER_SUPPLY_PROP_STARTCHARGING_TEST))
+			continue;
+	//#endif /* ODM_WT_EDIT */
+#ifdef VENDOR_EDIT
+/*LiYue@BSP.CHG.Basic, 2019/08/22, Add for reduce reading Vbus*/
 		if (((psy->desc->properties[j] == POWER_SUPPLY_PROP_VOLTAGE_NOW) && (psy->desc->type == POWER_SUPPLY_TYPE_USB))
 			|| ((psy->desc->properties[j] == POWER_SUPPLY_PROP_CHARGE_NOW) && (psy->desc->type == POWER_SUPPLY_TYPE_BATTERY)))
 			continue;
+#endif
 		attr = &power_supply_attrs[psy->desc->properties[j]];
 
 		ret = power_supply_show_property(dev, attr, prop_buf);

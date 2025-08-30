@@ -20,6 +20,11 @@
 #include <linux/atomic.h>
 #include <asm/page.h>
 
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MULTI_KSWAPD)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-22,add multi kswapd support*/
+#include <linux/oppo_multi_kswapd.h>
+#endif /*VENDOR_EDIT*/
+
 /* Free memory management - zoned buddy allocator.  */
 #ifndef CONFIG_FORCE_MAX_ZONEORDER
 #define MAX_ORDER 11
@@ -28,6 +33,10 @@
 #endif
 #define MAX_ORDER_NR_PAGES (1 << (MAX_ORDER - 1))
 
+#if defined(VENDOR_EDIT) && defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+//Peifeng.Li@PSW.Kernel.BSP.Memory, 2020/04/22, multi-freearea
+#define FREE_AREA_COUNTS 4
+#endif
 /*
  * PAGE_ALLOC_COSTLY_ORDER is the order at which allocations are deemed
  * costly to service.  That is between allocation orders which should
@@ -56,11 +65,14 @@ enum migratetype {
 	 */
 	MIGRATE_CMA,
 #endif
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MEMORY_ISOLATE)
+/* Hucai.Zhou@PSW.BSP.Kernel.MM, 2018-3-15
+ * Add a migrate type to manage special page alloc/free
+ */
+        MIGRATE_OPPO2,
+#endif /* VENDOR_EDIT */
 	MIGRATE_PCPTYPES, /* the number of types on the pcp lists */
 	MIGRATE_HIGHATOMIC = MIGRATE_PCPTYPES,
-#ifdef CONFIG_DEFRAG
-	MIGRATE_UNMOVABLE_DEFRAG_POOL,
-#endif
 #ifdef CONFIG_MEMORY_ISOLATION
 	MIGRATE_ISOLATE,	/* can't allocate from here */
 #endif
@@ -142,10 +154,6 @@ enum zone_stat_item {
 	NR_ZONE_ACTIVE_ANON,
 	NR_ZONE_INACTIVE_FILE,
 	NR_ZONE_ACTIVE_FILE,
-#ifdef CONFIG_MEMPLUS
-	NR_ZONE_INACTIVE_ANON_SWAPCACHE,
-	NR_ZONE_ACTIVE_ANON_SWAPCACHE,
-#endif
 	NR_ZONE_UNEVICTABLE,
 	NR_ZONE_WRITE_PENDING,	/* Count of dirty, writeback and unstable pages */
 	NR_MLOCK,		/* mlock()ed pages found and moved off LRU */
@@ -156,13 +164,18 @@ enum zone_stat_item {
 #if IS_ENABLED(CONFIG_ZSMALLOC)
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
-#ifdef CONFIG_ONEPLUS_HEALTHINFO
-	NR_IONCACHE_PAGES,
-#endif
 	NR_FREE_CMA_PAGES,
-#ifdef CONFIG_DEFRAG
-	NR_FREE_DEFRAG_POOL,
-#endif
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MEMORY_ISOLATE)
+/* Hucai.Zhou@PSW.BSP.Kernel.MM, 2018-3-15
+ * Account free pages for MIGRATE_OPPO
+ */
+	NR_FREE_OPPO2_PAGES,
+#endif /* VENDOR_EDIT */
+
+#ifdef VENDOR_EDIT
+ /*Huacai.Zhou@PSW.BSP.Kernel.MM, 2018-09-25, add ion cached account*/
+	NR_IONCACHE_PAGES,
+#endif /* VENDOR_EDIT */
 	NR_VM_ZONE_STAT_ITEMS };
 
 enum node_stat_item {
@@ -171,10 +184,6 @@ enum node_stat_item {
 	NR_ACTIVE_ANON,		/*  "     "     "   "       "         */
 	NR_INACTIVE_FILE,	/*  "     "     "   "       "         */
 	NR_ACTIVE_FILE,		/*  "     "     "   "       "         */
-#ifdef CONFIG_MEMPLUS
-	NR_INACTIVE_ANON_SWAPCACHE,	/*  "     "     "   "       "         */
-	NR_ACTIVE_ANON_SWAPCACHE,	/*  "     "     "   "       "         */
-#endif
 	NR_UNEVICTABLE,		/*  "     "     "   "       "         */
 	NR_SLAB_RECLAIMABLE,
 	NR_SLAB_UNRECLAIMABLE,
@@ -223,22 +232,13 @@ enum lru_list {
 	LRU_ACTIVE_ANON = LRU_BASE + LRU_ACTIVE,
 	LRU_INACTIVE_FILE = LRU_BASE + LRU_FILE,
 	LRU_ACTIVE_FILE = LRU_BASE + LRU_FILE + LRU_ACTIVE,
-#ifdef CONFIG_MEMPLUS
-	LRU_INACTIVE_ANON_SWPCACHE,
-	LRU_ACTIVE_ANON_SWPCACHE,
-#endif
 	LRU_UNEVICTABLE,
 	NR_LRU_LISTS
 };
 
 #define for_each_lru(lru) for (lru = 0; lru < NR_LRU_LISTS; lru++)
 
-#ifdef CONFIG_MEMPLUS
-#define for_each_evictable_lru(lru)	\
-	for (lru = 0; lru <= LRU_ACTIVE_ANON_SWPCACHE; lru++)
-#else
 #define for_each_evictable_lru(lru) for (lru = 0; lru <= LRU_ACTIVE_FILE; lru++)
-#endif
 
 static inline int is_file_lru(enum lru_list lru)
 {
@@ -247,12 +247,7 @@ static inline int is_file_lru(enum lru_list lru)
 
 static inline int is_active_lru(enum lru_list lru)
 {
-#ifdef CONFIG_MEMPLUS
-	return (lru == LRU_ACTIVE_ANON ||
-		lru == LRU_ACTIVE_FILE || lru == LRU_ACTIVE_ANON_SWPCACHE);
-#else
 	return (lru == LRU_ACTIVE_ANON || lru == LRU_ACTIVE_FILE);
-#endif
 }
 
 struct zone_reclaim_stat {
@@ -282,15 +277,7 @@ struct lruvec {
 
 /* Mask used at gathering information at once (see memcontrol.c) */
 #define LRU_ALL_FILE (BIT(LRU_INACTIVE_FILE) | BIT(LRU_ACTIVE_FILE))
-#ifdef CONFIG_MEMPLUS
-#define LRU_ALL_ANON (BIT(LRU_INACTIVE_ANON) |	\
-	BIT(LRU_ACTIVE_ANON) |	\
-	BIT(LRU_INACTIVE_ANON_SWPCACHE) |	\
-	BIT(LRU_ACTIVE_ANON_SWPCACHE))
-#else
 #define LRU_ALL_ANON (BIT(LRU_INACTIVE_ANON) | BIT(LRU_ACTIVE_ANON))
-#endif
-
 #define LRU_ALL	     ((1 << NR_LRU_LISTS) - 1)
 
 /* Isolate unmapped file */
@@ -310,10 +297,10 @@ enum zone_watermarks {
 	NR_WMARK
 };
 
-#define min_wmark_pages(z) (z->_watermark[WMARK_MIN] + z->watermark_boost)
-#define low_wmark_pages(z) (z->_watermark[WMARK_LOW] + z->watermark_boost)
+#define min_wmark_pages(z) (z->_watermark[WMARK_MIN] + z->watermark_boost / 2)
+#define low_wmark_pages(z) (z->_watermark[WMARK_LOW] + z->watermark_boost / 2)
 #define high_wmark_pages(z) (z->_watermark[WMARK_HIGH] + z->watermark_boost)
-#define wmark_pages(z, i) (z->_watermark[i] + z->watermark_boost)
+#define wmark_pages(z, i) (z->_watermark[i] + (((i) == WMARK_HIGH) ? (z->watermark_boost) : (z->watermark_boost / 2)))
 
 struct per_cpu_pages {
 	int count;		/* number of pages in the list */
@@ -400,6 +387,15 @@ enum zone_type {
 
 #ifndef __GENERATING_BOUNDS_H
 
+#if defined(VENDOR_EDIT) && defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+//Peifeng.Li@PSW.Kernel.BSP.Memory, 2020/04/22, multi-freearea
+struct page_label {
+    unsigned long label;
+    unsigned long segment;
+};
+#endif
+
+
 struct zone {
 	/* Read-mostly fields */
 
@@ -408,7 +404,12 @@ struct zone {
 	unsigned long watermark_boost;
 
 	unsigned long nr_reserved_highatomic;
-
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MEMORY_ISOLATE)
+/* Hucai.Zhou@PSW.BSP.Kernel.MM, 2018-3-15
+ * Number of MIGRATE_OPPO page block.
+ */
+	unsigned long nr_migrate_oppo2_block;
+#endif /* VENDOR_EDIT */
 	/*
 	 * We don't know if the memory that we're going to allocate will be
 	 * freeable or/and it will be released eventually, so to avoid totally
@@ -485,7 +486,10 @@ struct zone {
 	unsigned long		managed_pages;
 	unsigned long		spanned_pages;
 	unsigned long		present_pages;
-
+#if defined(VENDOR_EDIT) && defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+//Peifeng.Li@PSW.Kernel.BSP.Memory, 2020/04/22, multi-freearea
+    struct page_label zone_label[FREE_AREA_COUNTS];
+#endif
 	const char		*name;
 
 #ifdef CONFIG_MEMORY_ISOLATION
@@ -508,7 +512,12 @@ struct zone {
 	ZONE_PADDING(_pad1_)
 
 	/* free areas of different sizes */
+#if defined(VENDOR_EDIT) && defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+//Peifeng.Li@PSW.Kernel.BSP.Memory, 2020/04/22, multi-freearea
+	struct free_area	free_area[FREE_AREA_COUNTS][MAX_ORDER];
+#else
 	struct free_area	free_area[MAX_ORDER];
+#endif
 
 	/* zone flags, see below */
 	unsigned long		flags;
@@ -712,8 +721,13 @@ typedef struct pglist_data {
 	int node_id;
 	wait_queue_head_t kswapd_wait;
 	wait_queue_head_t pfmemalloc_wait;
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MULTI_KSWAPD)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-22,add multi kswapd support*/
+	struct task_struct *kswapd[MAX_KSWAPD_THREADS];
+#else
 	struct task_struct *kswapd;	/* Protected by
 					   mem_hotplug_begin/end() */
+#endif /*VENDOR_EDIT*/
 	int kswapd_order;
 	enum zone_type kswapd_classzone_idx;
 
@@ -924,7 +938,7 @@ static inline int is_highmem_idx(enum zone_type idx)
 }
 
 /**
- * is_highmem - helper function to quickly check if a struct zone is a 
+ * is_highmem - helper function to quickly check if a struct zone is a
  *              highmem zone or not.  This is an attempt to keep references
  *              to ZONE_{DMA/NORMAL/HIGHMEM/etc} in general code to a minimum.
  * @zone - pointer to struct zone variable

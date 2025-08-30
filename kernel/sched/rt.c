@@ -3,6 +3,7 @@
  * Real-Time Scheduling Class (mapped to the SCHED_FIFO and SCHED_RR
  * policies)
  */
+#include "linux/types.h"
 #include "sched.h"
 
 #include "pelt.h"
@@ -10,15 +11,6 @@
 #include <linux/interrupt.h>
 
 #include "walt.h"
-#ifdef CONFIG_OPCHAIN
-// morison.yan@ASTI, 2019/4/29, add for uxrealm CONFIG_OPCHAIN
-#include <oneplus/uxcore/opchain_helper.h>
-#endif
-
-#ifdef CONFIG_CONTROL_CENTER
-#include <linux/oem/control_center.h>
-#endif
-#include <linux/oem/im.h>
 
 int sched_rr_timeslice = RR_TIMESLICE;
 int sysctl_sched_rr_timeslice = (MSEC_PER_SEC / HZ) * RR_TIMESLICE;
@@ -981,6 +973,93 @@ out:
 #endif
 }
 
+/*
+ * Check whether current rt_rq should return borrowed runtime back.
+ * Return true if it did need to return borrowed runtime back.
+ * Return false otherwise.
+ */
+static bool sched_rt_runtime_check_return(struct rt_rq *rt_rq)
+{
+    struct task_struct *p;
+    struct rq *rq;
+    s64 want;
+    int i;
+
+    if (!sched_feat(RT_RUNTIME_SHARE))
+       goto no_need;
+   /*
+	* If RT_RUNTIME_SHARE enabled, need to check whether current rt_rq should return
+   	* borrowed runtime back.
+   	* If the first cfs tasks in this cpu rq have cpus allowed only to current cpu, then
+   	* the task is waiting and cannot be migarated to other cpu to run. So borrowed rt
+   	* runtime from other cpu is unafair to this task and should return them back.
+   	*/
+   	rq = rq_of_rt_rq(rt_rq);
+
+    if (!rt_rq->tg || rq->nr_running == 1)
+    	goto no_need;
+
+    if (rt_rq->rt_runtime != rt_rq->tg->rt_bandwidth.rt_runtime) {
+    	/*
+    	* This rt_rq have borrowed time before, so it need to check whether need
+    	* return the rt runtime.
+    	*/
+    	p = list_first_entry_or_null(&rq->cfs_tasks, struct task_struct,
+    		se.group_node);
+    	if (p && p->nr_cpus_allowed == 1) {
+    		/*
+    		* Return the borrowed rt runtime back to other cpus.
+    		*/
+    		struct rt_bandwidth *rt_b = sched_rt_bandwidth(rt_rq);
+
+    		raw_spin_lock(&rt_b->rt_runtime_lock);
+    		want = rt_b->rt_runtime - rt_rq->rt_runtime;
+
+    		for_each_cpu(i, rq->rd->span) {
+    			struct rt_rq *iter = sched_rt_period_rt_rq(rt_b, i);
+    			struct rt_bandwidth *iter_rt_b = sched_rt_bandwidth(iter);
+    			s64 diff;
+
+    			if (iter == rt_rq || iter->rt_runtime == RUNTIME_INF)
+    				continue;
+
+    			raw_spin_lock(&iter->rt_runtime_lock);
+    			diff = iter_rt_b->rt_runtime - iter->rt_runtime;
+    			if (want > 0) {
+    				if (diff >= 0) {
+    					raw_spin_unlock(&iter->rt_runtime_lock);
+    					continue;
+    				}
+
+    				diff = max_t(s64, diff, -want);
+    				want -= diff;
+    				rt_rq->rt_runtime += diff;
+    				iter->rt_runtime -= diff;
+    			} else {
+    				if (diff <= 0) {
+    					raw_spin_unlock(&iter->rt_runtime_lock);
+    					continue;
+    				}
+    				diff = min_t(s64, diff, -want);
+    				want += diff;
+    				rt_rq->rt_runtime -= diff;
+    				iter->rt_runtime += diff;
+    			}
+    			raw_spin_unlock(&iter->rt_runtime_lock);
+
+    			if (!want)
+    				break;
+    		}
+
+    		raw_spin_unlock(&rt_b->rt_runtime_lock);
+    		return true;
+    	}
+    }
+
+no_need:
+    return false;
+}
+
 static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
 {
 	u64 runtime = sched_rt_runtime(rt_rq);
@@ -988,10 +1067,21 @@ static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
 	if (rt_rq->rt_throttled)
 		return rt_rq_throttled(rt_rq);
 
-	if (runtime >= sched_rt_period(rt_rq))
-		return 0;
+	if (runtime >= sched_rt_period(rt_rq)) {
+    	if (sched_rt_runtime_check_return(rt_rq)) {
+    		/*
+    		 * If current rt_rq have just returned borrowed rt runtime, no need
+    		 * and should not to do balance runtime. Otherwise, it will borrow
+    		 * rt runtime from other cpu again.
+    		 */
+    		goto runtime;
+    	}
+     	return 0;
+    }
 
 	balance_runtime(rt_rq);
+
+runtime:
 	runtime = sched_rt_runtime(rt_rq);
 	if (runtime == RUNTIME_INF)
 		return 0;
@@ -1559,7 +1649,6 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags,
 		    p->prio < cpu_rq(target)->rt.highest_prio.curr))
 			cpu = target;
 	}
-	cpu_dist_inc(p, cpu);
 	rcu_read_unlock();
 
 out:
@@ -1778,14 +1867,6 @@ static int rt_energy_aware_wake_cpu(struct task_struct *task)
 	int best_cpu_idle_idx = INT_MAX;
 	int cpu_idle_idx = -1;
 	bool boost_on_big = rt_boost_on_big();
-#ifdef CONFIG_OPCHAIN
-	// curtis@ASTI, 2019/4/29, add for uxrealm CONFIG_OPCHAIN
-	bool best_cpu_is_claimed = false;
-#endif
-
-	/* For surfaceflinger with util > 90, prefer to use big core */
-	if (task->compensate_need == 2 && tutil > 90)
-		boost_on_big = true;
 
 	rcu_read_lock();
 
@@ -1796,12 +1877,6 @@ static int rt_energy_aware_wake_cpu(struct task_struct *task)
 	sd = rcu_dereference(*per_cpu_ptr(&sd_asym_cpucapacity, cpu));
 	if (!sd)
 		goto unlock;
-
-#ifdef CONFIG_CONTROL_CENTER
-	boost_on_big = boost_on_big |
-		im_hwc(task) | // HWC select big core first
-		(im_sf(task) && ccdm_get_hint(CCDM_TB_PLACE_BOOST));
-#endif
 
 retry:
 	sg = sd->groups;
@@ -1818,15 +1893,6 @@ retry:
 		}
 
 		for_each_cpu_and(cpu, lowest_mask, sched_group_span(sg)) {
-#ifdef CONFIG_UXCHAIN
-			struct rq *rq = cpu_rq(cpu);
-			struct task_struct *tsk = rq->curr;
-
-			if (tsk->static_ux && tsk == tsk->group_leader &&
-				sysctl_launcher_boost_enabled && sysctl_uxchain_enabled)
-				continue;
-#endif
-
 			if (cpu_isolated(cpu))
 				continue;
 
@@ -1837,18 +1903,6 @@ retry:
 
 			if (__cpu_overutilized(cpu, util + tutil))
 				continue;
-
-#ifdef CONFIG_OPCHAIN
-			// curtis@ASTI, 2019/4/29, add for uxrealm CONFIG_OPCHAIN
-			if (best_cpu_is_claimed) {
-				best_cpu_idle_idx = cpu_idle_idx;
-				best_cpu_util_cum = util_cum;
-				best_cpu_util = util;
-				best_cpu = cpu;
-				best_cpu_is_claimed = false;
-				continue;
-			}
-#endif
 
 			/* Find the least loaded CPU */
 			if (util > best_cpu_util)
@@ -1881,15 +1935,6 @@ retry:
 					continue;
 			}
 
-#ifdef CONFIG_OPCHAIN
-			// curtis@ASTI, 2019/4/29, add for uxrealm CONFIG_OPCHAIN
-			if (opc_get_claim_on_cpu(cpu)) {
-				if (best_cpu != -1)
-					continue;
-				else
-					best_cpu_is_claimed = true;
-			}
-#endif
 			best_cpu_idle_idx = cpu_idle_idx;
 			best_cpu_util_cum = util_cum;
 			best_cpu_util = util;
@@ -3018,3 +3063,16 @@ void print_rt_stats(struct seq_file *m, int cpu)
 	rcu_read_unlock();
 }
 #endif /* CONFIG_SCHED_DEBUG */
+
+bool idle_top_rt_rq_enqueue(struct rt_rq *rt_rq)
+{
+   if (!sched_feat(RT_RUNTIME_SHARE))
+	   return false;
+
+   rt_rq->rt_throttled = 0;
+   sched_rt_rq_enqueue(rt_rq);
+   if (rt_rq->rt_nr_running)
+	  return true;
+
+    return false;
+}

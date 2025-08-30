@@ -93,14 +93,6 @@
 #include <linux/thread_info.h>
 #include <linux/cpufreq_times.h>
 
-#ifdef CONFIG_HOUSTON
-#include <oneplus/houston/houston_helper.h>
-#endif
-
-#ifdef CONFIG_CONTROL_CENTER
-#include <oneplus/control_center/control_center_helper.h>
-#endif
-
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <linux/uaccess.h>
@@ -117,7 +109,6 @@
  * Minimum number of threads to boot the kernel
  */
 #define MIN_THREADS 20
-
 /*
  * Maximum number of threads
  */
@@ -565,6 +556,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		if (retval)
 			goto out;
 	}
+
 	/* a new mm has just been created */
 	retval = arch_dup_mmap(oldmm, mm);
 out:
@@ -896,28 +888,6 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->task_frag.page = NULL;
 	tsk->wake_q.next = NULL;
 
-#ifdef CONFIG_OPCHAIN
-	tsk->utask_tag = 0;
-	tsk->utask_tag_base = 0;
-	tsk->etask_claim = 0;
-	tsk->claim_cpu = -1;
-	tsk->utask_slave = 0;
-#endif
-
-#ifdef CONFIG_UXCHAIN
-	tsk->static_ux = 0;
-	tsk->dynamic_ux = 0;
-	tsk->ux_depth = 0;
-	tsk->oncpu_time = 0;
-	tsk->prio_saved = 0;
-	tsk->saved_flag = 0;
-#endif
-
-#ifdef CONFIG_CONTROL_CENTER
-	tsk->nice_effect_ts = 0;
-	tsk->cached_prio = tsk->static_prio;
-#endif
-
 	account_kernel_stack(tsk, 1);
 
 	kcov_task_init(tsk);
@@ -996,8 +966,6 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	mm->mmap = NULL;
 	mm->mm_rb = RB_ROOT;
 	mm->vmacache_seqnum = 0;
-	mm->va_feature = 0;
-	mm->zygoteheap_in_MB = 0;
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
 	rwlock_init(&mm->mm_rb_lock);
 #endif
@@ -1587,10 +1555,6 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
 	sig->oom_score_adj = current->signal->oom_score_adj;
 	sig->oom_score_adj_min = current->signal->oom_score_adj_min;
 
-	/* CONFIG_MEMPLUS add start by bin.zhong@ASTI */
-	memplus_init_task_reclaim_stat(sig);
-	/* add end */
-
 	mutex_init(&sig->cred_guard_mutex);
 
 	return 0;
@@ -1933,6 +1897,7 @@ static __latent_entropy struct task_struct *copy_process(
 	p->sequential_io_avg	= 0;
 #endif
 
+
 	/* Perform scheduler related setup. Assign this task to a CPU. */
 	retval = sched_fork(clone_flags, p);
 	if (retval)
@@ -2153,18 +2118,6 @@ static __latent_entropy struct task_struct *copy_process(
 
 	trace_task_newtask(p, clone_flags);
 	uprobe_copy_process(p, clone_flags);
-
-#if defined(CONFIG_CONTROL_CENTER) || defined(CONFIG_HOUSTON)
-	if (likely(!IS_ERR(p))) {
-#ifdef CONFIG_HOUSTON
-		ht_perf_event_init(p);
-		ht_rtg_init(p);
-#endif
-#ifdef CONFIG_CONTROL_CENTER
-		cc_tsk_init((void *) p);
-#endif
-	}
-#endif
 
 	return p;
 

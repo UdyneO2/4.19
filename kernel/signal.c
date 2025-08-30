@@ -53,6 +53,12 @@
 #include <asm/siginfo.h>
 #include <asm/cacheflush.h>
 #include "audit.h"	/* audit_signal_info() */
+#include "soc/oppo/oppo_project.h"
+
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HANS)
+// Kun.Zhou@AD.RESCONTROL, 2019/09/23, add for hans freeze manager
+#include <linux/hans.h>
+#endif
 
 /*
  * SLAB caches for signal bits.
@@ -1071,17 +1077,51 @@ static inline void userns_fixup_signal_uid(struct siginfo *info, struct task_str
 }
 #endif
 
-static int print_key_process_murder __read_mostly = 1;
+#ifdef VENDOR_EDIT
+//Haoran.Zhang@PSW.AD.Kernel.1052210, 2015/11/04, Modify for the sender who kill system_server
+//Jianping.Zheng@PSW.AD.Kernel.1052210, 2018/04/31, Modify for print log when the key process thread killed
 static bool is_zygote_process(struct task_struct *t)
 {
 	const struct cred *tcred = __task_cred(t);
 
-	if (!strcmp(t->comm, "main") && (tcred->uid.val == 0) && (t->parent != 0 && !strcmp(t->parent->comm, "init")))
+	struct task_struct * first_child = NULL;
+	if(t->children.next && t->children.next != (struct list_head*)&t->children.next)
+		first_child = container_of(t->children.next, struct task_struct, sibling);
+	if(!strcmp(t->comm, "main") && (tcred->uid.val == 0) && (t->parent != 0 && !strcmp(t->parent->comm,"init"))  )
 		return true;
 	else
 		return false;
 	return false;
 }
+static bool is_systemserver_process(struct task_struct *t) {
+    if (!strcmp(t->comm, "system_server")) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+static bool is_key_process(struct task_struct *t) {
+    struct pid *pgrp;
+    struct task_struct *taskp;
+
+    if (t->pid == t->tgid) {
+        if (is_systemserver_process(t) || is_zygote_process(t)) {
+            return true;
+        }
+    } else {
+        pgrp = task_pgrp(t);
+        if (pgrp != NULL) {
+            taskp = pid_task(pgrp, PIDTYPE_PID);
+            if (taskp != NULL && (is_systemserver_process(taskp) || is_zygote_process(taskp))) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+#endif
 
 static int __send_signal(int sig, struct siginfo *info, struct task_struct *t,
 			enum pid_type type, int from_ancestor_ns)
@@ -1094,20 +1134,18 @@ static int __send_signal(int sig, struct siginfo *info, struct task_struct *t,
 	assert_spin_locked(&t->sighand->siglock);
 
 	result = TRACE_SIGNAL_IGNORED;
+#ifdef VENDOR_EDIT
+//Haoran.Zhang@PSW.AD.Kernel.1052210, 2015/11/04, Modify for the sender who kill system_server
+        if(1) {
+                /*add the SIGKILL print log for some debug*/
+                if((sig == SIGHUP || sig == 33 || sig == SIGKILL || sig == SIGSTOP || sig == SIGABRT || sig == SIGTERM || sig == SIGCONT) && is_key_process(t)) {
+                        printk("Some other process %d:%s want to send sig:%d to pid:%d tgid:%d comm:%s\n", current->pid, current->comm, sig, t->pid, t->tgid, t->comm);
+                } else if (sig == SIGSTOP && get_eng_version() == AGING) {
+			printk("Process %d:%s want to send SIGSTOP to %d:%s\n", current->pid, current->comm, t->pid, t->comm);
 
-	if (print_key_process_murder) {
-		if (!strcmp(t->comm, "system_server") ||
-			is_zygote_process(t) ||
-			!strcmp(t->comm, "surfaceflinger") ||
-			!strcmp(t->comm, "servicemanager") ||
-			(!strcmp(t->comm, "netd") && sig == 9)) {
-			struct task_struct *tg = current->group_leader;
-
-			pr_info("process %d:%s, %d:%s send sig:%d to process %d:%s\n",
-			       tg->pid, tg->comm, current->pid, current->comm, sig, t->pid, t->comm);
 		}
-	}
-
+        }
+#endif
 	if (!prepare_signal(sig, t,
 			from_ancestor_ns || (info == SEND_SIG_PRIV) || (info == SEND_SIG_FORCED)))
 		goto ret;
@@ -1281,20 +1319,15 @@ int do_send_sig_info(int sig, struct siginfo *info, struct task_struct *p,
 	unsigned long flags;
 	int ret = -ESRCH;
 
-	/* huruihuan add for kill task in D status */
-	if (sig == SIGKILL) {
-		if (p && p->flags & PF_FROZEN) {
-			struct task_struct *child = p;
-
-			rcu_read_lock();
-			do {
-				child = next_thread(child);
-				child->kill_flag = 1;
-				__thaw_task(child);
-			} while (child != p);
-			rcu_read_unlock();
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HANS)
+// Kun.Zhou@AD.RESCONTROL, 2019/09/23, add for hans freeze manager
+	if (is_frozen_tg(p)  /*signal receiver thread group is frozen?*/
+		&& (sig == SIGKILL || sig == SIGTERM || sig == SIGABRT || sig == SIGQUIT)) {
+		if (hans_report(SIGNAL, task_tgid_nr(current), task_uid(p).val, "signal", -1) == HANS_ERROR) {
+			printk(KERN_ERR "HANS: report signal failed, sig = %d, caller = %d, target_uid = %d\n", sig, task_tgid_nr(current), task_uid(p).val);
 		}
 	}
+#endif
 
 	if (lock_task_sighand(p, &flags)) {
 		ret = send_signal(sig, info, p, type);
@@ -3325,7 +3358,6 @@ COMPAT_SYSCALL_DEFINE4(rt_sigtimedwait, compat_sigset_t __user *, uthese,
 SYSCALL_DEFINE2(kill, pid_t, pid, int, sig)
 {
 	struct siginfo info;
-	struct task_struct *p;
 
 	clear_siginfo(&info);
 	info.si_signo = sig;
@@ -3333,12 +3365,6 @@ SYSCALL_DEFINE2(kill, pid_t, pid, int, sig)
 	info.si_code = SI_USER;
 	info.si_pid = task_tgid_vnr(current);
 	info.si_uid = from_kuid_munged(current_user_ns(), current_uid());
-
-	if (sig == SIGQUIT || sig == SIGSEGV ||  sig == SIGABRT) {
-		p = pid_task(find_vpid(pid), PIDTYPE_PID);
-		if (p)
-			unfreezer_fork(p);
-	}
 
 	return kill_something_info(sig, &info, pid);
 }

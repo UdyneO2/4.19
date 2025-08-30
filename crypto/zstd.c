@@ -23,7 +23,10 @@
 #include <crypto/internal/scompress.h>
 
 
-#define ZSTD_DEF_LEVEL	3
+#ifdef ODM_WT_EDIT
+// Yajun.Zhang@ODM_WT.PERFORMANCE,20200923,enable zstd zram algorith for improve free memory after boot
+#define ZSTD_DEF_LEVEL	1
+#endif/*ODM_WT_EDIT*/
 
 struct zstd_ctx {
 	ZSTD_CCtx *cctx;
@@ -34,7 +37,10 @@ struct zstd_ctx {
 
 static ZSTD_parameters zstd_params(void)
 {
-	return ZSTD_getParams(ZSTD_DEF_LEVEL, 0, 0);
+#ifdef ODM_WT_EDIT
+// Yajun.Zhang@ODM_WT.PERFORMANCE,20200923,enable zstd zram algorith for improve free memory after boot
+	return ZSTD_getParams(ZSTD_DEF_LEVEL, PAGE_SIZE, 0);
+#endif/*ODM_WT_EDIT*/
 }
 
 static int zstd_comp_init(struct zstd_ctx *ctx)

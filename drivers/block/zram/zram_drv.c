@@ -41,7 +41,15 @@ static DEFINE_IDR(zram_index_idr);
 static DEFINE_MUTEX(zram_index_mutex);
 
 static int zram_major;
+#ifdef VENDOR_EDIT //YiXue.Ge@PSW.kernel.drv 20170703 modify for enable lz4 default
+#ifdef CONFIG_CRYPTO_LZ4
+static const char *default_compressor = "lz4";
+#else /*CONFIG_ZRAM_LZ4_COMPRESS*/
 static const char *default_compressor = "lzo";
+#endif /*CONFIG_ZRAM_LZ4_COMPRESS*/
+#else /*VENDOR_EDIT*/
+static const char *default_compressor = "lzo";
+#endif/*VENDOR_EDIT*/
 
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
@@ -1492,7 +1500,7 @@ compress_again:
 		atomic64_inc(&zram->stats.writestall);
 		entry = zram_entry_alloc(zram, comp_len,
 				GFP_NOIO | __GFP_HIGHMEM |
-				__GFP_MOVABLE | __GFP_CMA);
+				__GFP_MOVABLE | __GFP_CMA | GFP_ATOMIC | ___GFP_HIGH_ATOMIC_ZRAM);
 		if (entry)
 			goto compress_again;
 		return -ENOMEM;

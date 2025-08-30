@@ -13,8 +13,11 @@
 #define IPA_PM_MAX_EX_CL 64
 #define IPA_PM_THRESHOLD_MAX 5
 #define IPA_PM_EXCEPTION_MAX 5
-#define IPA_PM_DEFERRED_TIMEOUT 10
-
+//#ifdef ODM_WT_EDIT
+//Wei.Zhang@ODM_WT.NW.TP.67657 2020/09/15, for ping delay issue change the timer from10 to 100
+//#define IPA_PM_DEFERRED_TIMEOUT 10
+#define IPA_PM_DEFERRED_TIMEOUT 100
+//#endif ODM_WT_EDIT
 /*
  * ipa_pm group names
  *

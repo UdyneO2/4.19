@@ -30,9 +30,12 @@
 #include "quirks.h"
 #include "sd_ops.h"
 #include "pwrseq.h"
+#include <soc/oppo/boot_mode.h>
 
 #define DEFAULT_CMD6_TIMEOUT_MS	500
 #define MIN_CACHE_EN_TIMEOUT_MS 1600
+
+extern int get_boot_mode(void);
 
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
@@ -66,6 +69,7 @@ static const unsigned int taac_mant[] = {
 			__res |= resp[__off-1] << ((32 - __shft) % 32);	\
 		__res & __mask;						\
 	})
+
 
 /*
  * Given the decoded CSD structure, decode the raw CID to our CID structure.
@@ -403,6 +407,8 @@ void mmc_check_bkops_support(struct mmc_card *card, u8 *ext_csd)
 			pr_debug("%s: AUTO_BKOPS_EN bit is set\n",
 				mmc_hostname(card->host));
 	}
+	pr_err("%s: AUTO_BKOPS_EN bit status is = %d\n",
+		mmc_hostname(card->host),card->ext_csd.auto_bkops_en);
 }
 
 /* Minimum partition switch timeout in milliseconds */
@@ -747,6 +753,83 @@ static int mmc_read_ext_csd(struct mmc_card *card)
 		return err;
 	}
 
+	if ((get_boot_mode() == MSM_BOOT_MODE__FACTORY) || (get_boot_mode() == MSM_BOOT_MODE__WLAN)) { //ftm mode
+		if((ext_csd[EXT_CSD_BKOPS_EN] & EXT_CSD_AUTO_BKOPS_MASK)) {
+			err = __mmc_switch(card, EXT_CSD_CMD_SET_NORMAL, EXT_CSD_BKOPS_EN,
+				   ext_csd[EXT_CSD_BKOPS_EN] & (~EXT_CSD_AUTO_BKOPS_MASK), card->ext_csd.generic_cmd6_time, 0,
+					   true, false, true);
+			if(err) {
+				pr_err("%s disable bkops err = %d\n",err);
+				return err;
+			}
+
+			err = mmc_get_ext_csd(card, &ext_csd);
+			if (err) {
+				pr_err("%s: %s: mmc_get_ext_csd() fails %d\n",
+					mmc_hostname(host), __func__, err);
+				/* If the host or the card can't do the switch,
+				 * fail more gracefully. */
+				if ((err != -EINVAL)
+				 && (err != -ENOSYS)
+				 && (err != -EFAULT))
+					return err;
+
+				/*
+				 * High capacity cards should have this "magic" size
+				 * stored in their CSD.
+				 */
+				if (card->csd.capacity == (4096 * 512)) {
+					pr_err("%s: unable to read EXT_CSD on a possible high capacity card. Card will be ignored.\n",
+						mmc_hostname(card->host));
+				} else {
+					pr_warn("%s: unable to read EXT_CSD, performance might suffer\n",
+						mmc_hostname(card->host));
+					err = 0;
+				}
+
+				return err;
+			}
+		}
+	} 
+	else { //other mode
+		if(!(ext_csd[EXT_CSD_BKOPS_EN] & EXT_CSD_AUTO_BKOPS_MASK)) {
+			err = __mmc_switch(card, EXT_CSD_CMD_SET_NORMAL, EXT_CSD_BKOPS_EN,
+				   ext_csd[EXT_CSD_BKOPS_EN] | EXT_CSD_AUTO_BKOPS_MASK, card->ext_csd.generic_cmd6_time, 0,
+					   true, false, true);
+			if(err) {
+				pr_err("%s enable bkops err = %d\n",err);
+				return err;
+			}
+
+			err = mmc_get_ext_csd(card, &ext_csd);
+			if (err) {
+				pr_err("%s: %s: mmc_get_ext_csd() fails %d\n",
+					mmc_hostname(host), __func__, err);
+				/* If the host or the card can't do the switch,
+				 * fail more gracefully. */
+				if ((err != -EINVAL)
+				 && (err != -ENOSYS)
+				 && (err != -EFAULT))
+					return err;
+
+				/*
+				 * High capacity cards should have this "magic" size
+				 * stored in their CSD.
+				 */
+				if (card->csd.capacity == (4096 * 512)) {
+					pr_err("%s: unable to read EXT_CSD on a possible high capacity card. Card will be ignored.\n",
+						mmc_hostname(card->host));
+				} else {
+					pr_warn("%s: unable to read EXT_CSD, performance might suffer\n",
+						mmc_hostname(card->host));
+					err = 0;
+				}
+
+				return err;
+			}
+		}
+	}
+
 	err = mmc_decode_ext_csd(card, ext_csd);
 	kfree(ext_csd);
 	return err;
@@ -887,6 +970,128 @@ static ssize_t mmc_dsr_show(struct device *dev,
 
 static DEVICE_ATTR(dsr, S_IRUGO, mmc_dsr_show, NULL);
 
+static int calc_mem_size(void)
+{
+	int temp_size;
+	temp_size = (int)totalram_pages/1024; //page size 4K
+	if ((temp_size > 0*256) && (temp_size <= 1*256))
+		return 1;
+	else if ((temp_size > 1*256) && (temp_size <= 2*256))
+		return 2;
+	else if ((temp_size > 2*256) && (temp_size <= 3*256))
+		return 3;
+	else if ((temp_size > 3*256) && (temp_size <= 4*256))
+		return 4;
+	else if ((temp_size > 4*256) && (temp_size <= 6*256))
+		return 6;
+	else if ((temp_size > 6*256) && (temp_size <= 8*256))
+		return 8;
+	else
+		return 0;
+
+}
+static int calc_mmc_size(struct mmc_card *card)
+{
+	int temp_size;
+	temp_size = (int)card->ext_csd.sectors/2/1024/1024; //sector size 512B
+	if ((temp_size > 8) && (temp_size <= 16))
+		return 16;
+	else if ((temp_size > 16) && (temp_size <= 32))
+		return 32;
+	else if ((temp_size > 32) && (temp_size <= 64))
+		return 64;
+	else if ((temp_size > 64) && (temp_size <= 128))
+		return 128;
+	else if ((temp_size > 128) && (temp_size <= 256))
+		return 256;
+	else
+		return 0;
+}
+
+static ssize_t flash_name_show(struct device *dev,
+			      struct device_attribute *attr,
+			      char *buf)
+{
+	struct mmc_card *card = mmc_dev_to_card(dev);
+	char *vendor_name = NULL;
+	char *emcp_name = NULL;
+	printk("manfid=0x%x,prod_name=%s\n",card->cid.manfid,card->cid.prod_name);
+	switch (card->cid.manfid) {
+		case 0x11:
+			vendor_name = "Toshiba";
+			break;
+		case 0x13:
+			vendor_name = "Micron";
+			if (strncmp(card->cid.prod_name, "Q3J97V", strlen("Q3J97V")) == 0)
+				emcp_name = "MT29TZZZ7D7EKKBT-107W.97V";
+			else if (strncmp(card->cid.prod_name, "S0J9F8", strlen("S0J9F8")) == 0)
+				emcp_name = "MT29TZZZAD8DKKBT-107W.9F8";
+			else if (strncmp(card->cid.prod_name, "S0J9D8", strlen("S0J9D8")) == 0)
+				emcp_name = "MT29VZZZAD8DQKSM-053W.9D8";//4+64
+			else if (strncmp(card->cid.prod_name, "S0J9K9", strlen("S0J9K9")) == 0)
+				emcp_name = "MT29VZZZAD9DQKSM-046W.9K9";//4+128
+			else if (strncmp(card->cid.prod_name, "G1J9R8", strlen("G1J9R8")) == 0)
+				emcp_name = "MT29VZZZAD8GQFSL-046"; //pascal 4+64
+			else if (strncmp(card->cid.prod_name, "G1J9S9", strlen("G1J9S9")) == 0)
+				emcp_name = "MT29VZZZAD9GQFSM-046"; //pascal 4+128
+			else
+				emcp_name = NULL;
+			break;
+		case 0x15:
+			vendor_name = "Samsung";
+			if (strncmp(card->cid.prod_name, "DH6DAB", strlen("DH6DAB")) == 0)
+				emcp_name = "KMDH6001DA-B422";
+			else if (strncmp(card->cid.prod_name, "DD68MB", strlen("DD68MB")) == 0)
+				emcp_name = "KMDD60018M-B320_FBGA";
+			else if (strncmp(card->cid.prod_name, "DP6DAB", strlen("DP6DAB")) == 0)
+				emcp_name = "KMDP6001DA-B425_FBGA";
+			else if (strncmp(card->cid.prod_name, "QE63MB", strlen("QE63MB")) == 0)
+				emcp_name = "KMQE60013M-B318";
+			else if (strncmp(card->cid.prod_name, "GD6BMB", strlen("GD6BMB")) == 0)
+				emcp_name = "KMGD6001BM-B421";
+			else if (strncmp(card->cid.prod_name, "RH64AB", strlen("RH64AB")) == 0)
+				emcp_name = "KMRH60014A-B614";
+			else if (strncmp(card->cid.prod_name, "DP68MB", strlen("DP68MB")) == 0)
+				emcp_name = "KMDP60018M-B425"; //pascal
+			else if (strncmp(card->cid.prod_name, "DX68MB", strlen("DX68MB")) == 0)
+				emcp_name = "KMDX60018M-B425"; //pascal
+			else if (strncmp(card->cid.prod_name, "DV6DMB", strlen("DV6DMB")) == 0)
+				emcp_name = "KMDV6001DM-B620"; //pascal
+			else
+				emcp_name = NULL;
+			break;
+		case 0x45:
+			vendor_name = "Sandisk";
+			break;
+		case 0x90:
+			vendor_name = "Hynix";
+			if (strncmp(card->cid.prod_name, "hC9aP3", strlen("hC9aP3")) == 0)
+				emcp_name = "H9HP53ACPMMDAR-KMM"; //pascal
+			else if (strncmp(card->cid.prod_name, "HAG4a2", strlen("HAG4a2")) == 0)
+				emcp_name = "H9TQ17ABJTCCUR";
+			else if (strncmp(card->cid.prod_name, "hB8aP?", strlen("hB8aP?")) == 0)
+				emcp_name = "H9TQ27ADFTMCUR";
+			else if (strncmp(card->cid.prod_name, "HCG8a4", strlen("HCG8a4")) == 0)
+				emcp_name = "H9TQ52ACLTMCUR";
+			else if (strncmp(card->cid.prod_name, "hB8aP>", strlen("hB8aP>")) == 0)
+				emcp_name = "H9HP27ADAMADAR-KMM"; //pascal
+
+			else
+				emcp_name = NULL;
+			break;
+		default:
+			vendor_name = "Unknown";
+			break;
+	}
+
+	if (emcp_name == NULL)
+		emcp_name = card->cid.prod_name;
+	return sprintf(buf, "%s_%s_%dGB_%dGB\n",
+		vendor_name, emcp_name, calc_mem_size(), calc_mmc_size(card));
+}
+
+static DEVICE_ATTR(flash_name, S_IRUGO, flash_name_show, NULL);
+
 static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_cid.attr,
 	&dev_attr_csd.attr,
@@ -913,6 +1118,7 @@ static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_rca.attr,
 	&dev_attr_dsr.attr,
 	&dev_attr_cmdq_en.attr,
+	&dev_attr_flash_name.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(mmc_std);
@@ -2968,6 +3174,16 @@ static const struct mmc_bus_ops mmc_ops = {
 /*
  * Starting point for MMC card init.
  */
+#ifdef VENDOR_EDIT
+//cuixiaogang@SRC, 2018-04-03. add support  for emmc scaling api
+static bool device_use_mmc;
+bool storage_is_mmc(void)
+{
+	return device_use_mmc;
+}
+EXPORT_SYMBOL(storage_is_mmc);
+#endif /* VENDOR_EDIT */
+
 int mmc_attach_mmc(struct mmc_host *host)
 {
 	int err;

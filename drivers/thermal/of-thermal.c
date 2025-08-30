@@ -73,7 +73,8 @@ struct __sensor_param {
  * @list: sibling thermal zone pointer
  * @senps: sensor related parameters
  */
-
+#ifndef VENDOR_EDIT
+/* zhangchao@ODM.BSP.Charger, 2020/07/28, modify for thermal log */
 struct __thermal_zone {
 	enum thermal_device_mode mode;
 	int passive_delay;
@@ -96,6 +97,7 @@ struct __thermal_zone {
 	/* sensor interface */
 	struct __sensor_param *senps;
 };
+#endif
 
 /**
  * struct virtual_sensor - internal representation of a virtual thermal zone
@@ -1315,6 +1317,11 @@ __init *thermal_of_build_thermal_zone(struct device_node *np)
 
 	tz->is_wakeable = of_property_read_bool(np,
 					"wake-capable-sensor");
+#ifdef VENDOR_EDIT
+/* zhangchao@ODM.BSP.Charger, 2020/07/28, modify for thermal log */
+	tz->temp_track = of_property_read_bool(np,
+					"temp-track");
+#endif
 	/*
 	 * REVIST: for now, the thermal framework supports only
 	 * one sensor per thermal zone. Thus, we are considering

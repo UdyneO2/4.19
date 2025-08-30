@@ -31,7 +31,12 @@
 #include <linux/of_irq.h>
 #include <linux/spinlock.h>
 #include <dt-bindings/input/gpio-keys.h>
-#include <linux/oem/oem_force_dump.h>
+
+//#ifdef ODM_HQ_EDIT
+/*Kui.Feng@ODM_HQ.SYSTEM 2020/06/23 coco After DVT1/cocoB After T0,change the volume key */
+#include <linux/string.h>
+#include <soc/oppo/oppo_project.h>
+//#endif
 
 struct gpio_button_data {
 	const struct gpio_keys_button *button;
@@ -374,8 +379,6 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 		return;
 	}
 
-	oem_check_force_dump_key(button->code, state);
-
 	if (type == EV_ABS) {
 		if (state)
 			input_event(input, type, button->code, button->value);
@@ -705,7 +708,10 @@ gpio_keys_get_devtree_pdata(struct device *dev)
 	struct gpio_keys_button *button;
 	struct fwnode_handle *child;
 	int nbuttons;
-
+	//#ifdef ODM_HQ_EDIT
+	/*Kui.Feng@ODM_HQ.SYSTEM 2020/06/23 coco After DVT1/cocoB After T0,change the volume key */
+	char *pcb_version = NULL;
+	//#endif
 	nbuttons = device_get_child_node_count(dev);
 	if (nbuttons == 0)
 		return ERR_PTR(-ENODEV);
@@ -736,6 +742,75 @@ gpio_keys_get_devtree_pdata(struct device *dev)
 			fwnode_handle_put(child);
 			return ERR_PTR(-EINVAL);
 		}
+        //#ifdef ODM_HQ_EDIT
+        /*Kui.Feng@ODM_HQ.SYSTEM 2020/06/23 coco After DVT1/cocoB After T0,change the volume key */
+        switch(get_project()) {
+        case 20673:
+        case 20674:
+        case 20675:
+        case 20677:
+        case 0x2067A:
+        case 0x2067D:
+		    if (fwnode_property_read_bool(child, "change-volume-key")) {
+			    if (button->code == KEY_VOLUMEUP) {
+				    pcb_version = (char *)get_PCB_Version();
+				    if (pcb_version != NULL) {
+					    /* HQ only have evb and t0 */
+					    if(!strcmp(pcb_version, "EVB") || !strcmp(pcb_version, "T0") || !strcmp(pcb_version, "T1")
+						    || !strcmp(pcb_version, "EVT1") || !strcmp(pcb_version, "EVT2")) {
+						    // do nothing
+					    } else {
+						    button->code = KEY_VOLUMEDOWN;
+					    }
+				    }
+			    }
+		    }
+			break;
+        case 20670:
+        case 20671:
+        case 20672:
+        case 20676:
+        case 20679:
+        case 0x2067C:
+		    if (fwnode_property_read_bool(child, "change-volume-key")) {
+			    if (button->code == KEY_VOLUMEUP) {
+				    pcb_version = (char *)get_PCB_Version();
+				    if (pcb_version != NULL) {
+					    /* HQ only have evb and t0 */
+					    if(!strcmp(pcb_version, "EVB1") || !strcmp(pcb_version, "T0") || !strcmp(pcb_version, "T1")) {
+						    // do nothing
+					    } else {
+						    button->code = KEY_VOLUMEDOWN;
+					    }
+				    }
+			    }
+		    }
+			break;
+        case 0x206BD:
+        case 0x206BF:
+        case 0x206C0:
+        case 0x206C1:
+        case 0x206BE:
+        case 0x206C2:
+        case 0x206C3:
+		    if (fwnode_property_read_bool(child, "change-volume-key")) {
+			    if (button->code == KEY_VOLUMEUP) {
+				    pcb_version = (char *)get_PCB_Version();
+				    if (pcb_version != NULL) {
+					    /* HQ only have evb and t0 */
+					    if(!strcmp(pcb_version, "T0")) {
+						    // do nothing
+					    } else {
+						    button->code = KEY_VOLUMEDOWN;
+					    }
+				    }
+			    }
+		    }
+			break;
+        default:
+			break;
+	    }
+		//#endif
 
 		fwnode_property_read_string(child, "label", &button->desc);
 

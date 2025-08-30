@@ -1056,33 +1056,49 @@ EXPORT_SYMBOL(mipi_dsi_dcs_set_tear_scanline);
  * Return: 0 on success or a negative error code on failure.
  */
 
+#ifdef ODM_HQ_EDIT
+/* Xiaojun.Lv@MM.Lcd.Driver, 2020/05/19, Add for backlight compatiblity */
 extern char *saved_command_line;
+#endif
 
 int mipi_dsi_dcs_set_display_brightness(struct mipi_dsi_device *dsi,
 					u16 brightness)
 {
 	ssize_t err;
+#ifdef ODM_HQ_EDIT
+/* Xiaojun.Lv@MM.Lcd.Driver, 2020/06/14, Add for backlight compatiblity */
 	u8 payload[2] = {0};
-	if (strnstr(saved_command_line, "mdss_dsi_ili9881h_boe_video", strlen(saved_command_line)) ||
-		strnstr(saved_command_line, "mdss_dsi_ili9881h_90hz_boe_video", strlen(saved_command_line)) ||
-		strnstr(saved_command_line, "mdss_dsi_ili9882n_90hz_video", strlen(saved_command_line))
-		) {
+	if (strstr(saved_command_line, "mdss_dsi_ili9881h_boe_video") || strstr(saved_command_line, "mdss_dsi_ili9881h_boe_90hz_video") || strstr(saved_command_line, "mdss_dsi_ili9881h_hlt_90hz_video")) {
 
-		payload[0] = (brightness & 0x7ff) >> 7;
-		payload[1] = (brightness << 1) & 0xfe;
-		//printk("[lcm] This is ilitek, backlight uses bits 0xFFE!\n");
-
-	} else if (strstr(saved_command_line, "mdss_dsi_nt36525b_inx_video")) {
-
-		payload[0] = (brightness & 0x7ff) >> 8;
+		payload[0] = brightness >> 8;
 		payload[1] = brightness & 0xff;
-		printk("[lcm] This is novatek, backlight uses bits 0x7FF!\n");
+		printk("[lcm] This is ilitek, backlight uses bits 0xFFE!\n");
 
-	} else {
+	} else if (strstr(saved_command_line, "mdss_dsi_hx83112a_tm_90hz_video")) {
+
+		payload[0] = brightness >> 8;
+		payload[1] = brightness & 0xff;
+		printk("[lcm] This is himax, backlight uses bits 0x7FF!\n");
+
+	}
+	else if(  strstr(saved_command_line, "mdss_dsi_nt36525b_hlt_b3_video")
+            || strstr(saved_command_line, "mdss_dsi_nt36525b_hlt_b8_video")
+            || strstr(saved_command_line, "mdss_dsi_nt36525b_inx_video")  )
+	{
+		brightness = brightness>>1;   //nt36525 to use 11bits(PWM freq around 30khz)
+		payload[0] = brightness >> 8;
+		payload[1] = brightness & 0xff;
+		printk("[lcm] This is novatek, backlight uses 11bits 0x7FF!\n");
+	}
+   else {
+
 		payload[0] = brightness >> 8;
 		payload[1] = brightness & 0xff;
 	}
-	//printk("[lcm] brightness_low is %d, brightness_high is %d\n", payload[0], payload[1]);
+	printk("[lcm] brightness_high is 0x%x, brightness_low is 0x%x, brightness is %d\n", payload[0], payload[1], brightness);
+#else
+	u8 payload[2] = { brightness & 0xff, brightness >> 8 };
+#endif
 
 	err = mipi_dsi_dcs_write(dsi, MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
 				 payload, sizeof(payload));
